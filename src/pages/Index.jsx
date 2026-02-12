@@ -86,6 +86,8 @@ function Index() {
   const abortControllerRef = useRef(null);
   const syncCheckRef = useRef(null);
   const lastRouteEnterRef = useRef(Date.now());
+  const pageAbortRef = useRef(null);
+  const statsAbortRef = useRef(null);
 
   // ✅ NEW: prevent double refresh spam on tab return
   const returnDebounceRef = useRef(0);
@@ -176,7 +178,6 @@ function Index() {
         dir = sortDirection,
         filters = appliedFilterConfig,
         showPageLoader = true,
-        includeStats = true, // ✅ NEW
         storeIdsOverride,
         storesToFetchOverride,
       } = opts;
@@ -184,54 +185,29 @@ function Index() {
       const effectiveStoreIds = storeIdsOverride ?? storeIds;
       const effectiveStoresToFetch = storesToFetchOverride ?? storesToFetch;
 
-      if (!userId) {
-        setIsInitialLoading(false);
-        return;
-      }
+      if (!userId) return;
+      if (!effectiveStoreIds || effectiveStoreIds.length === 0) return;
 
-      // ✅ IMPORTANT: do NOT blank UI if storeIds temporarily empty
-      if (!effectiveStoreIds || effectiveStoreIds.length === 0) {
-        return;
-      }
-
-      // Abort any in-flight request
-      if (abortControllerRef.current) abortControllerRef.current.abort();
+      // ✅ abort only the PAGE request
+      if (pageAbortRef.current) pageAbortRef.current.abort();
       const controller = new AbortController();
-      abortControllerRef.current = controller;
+      pageAbortRef.current = controller;
 
       if (showPageLoader) setIsLoadingPage(true);
       setError(null);
 
       try {
-        const promises = [
-          queryProductsPage({
-            userId,
-            storeIds: effectiveStoreIds,
-            organizationId: activeOrganizationId || undefined,
-            filterConfig: filters,
-            sortField: sort,
-            sortDirection: dir,
-            pageIndex: page,
-            pageSize: size,
-            signal: controller.signal,
-          }),
-        ];
-
-        if (includeStats) {
-          promises.push(
-            queryProductStats({
-              userId,
-              storeIds: effectiveStoreIds,
-              organizationId: activeOrganizationId || undefined,
-              filterConfig: filters,
-              signal: controller.signal,
-            }),
-          );
-        }
-
-        const results = await Promise.all(promises);
-        const pageResult = results[0];
-        const statsResult = includeStats ? results[1] : null;
+        const pageResult = await queryProductsPage({
+          userId,
+          storeIds: effectiveStoreIds,
+          organizationId: activeOrganizationId || undefined,
+          filterConfig: filters,
+          sortField: sort,
+          sortDirection: dir,
+          pageIndex: page,
+          pageSize: size,
+          signal: controller.signal,
+        });
 
         if (controller.signal.aborted) return;
 
@@ -244,22 +220,8 @@ function Index() {
         setPageProducts(products);
         setTotalCount(pageResult.totalCount);
         lastDataFetchAtRef.current = Date.now();
-
-        if (includeStats && statsResult) {
-          setStats(statsResult);
-          lastStatsFetchAtRef.current = Date.now();
-        }
-
-        // Save to cache (instant next load)
-        cache.setCache({
-          cacheKey: currentCacheKey,
-          pageProducts: products,
-          totalCount: pageResult.totalCount,
-          stats: includeStats && statsResult ? statsResult : cache.stats,
-        });
       } catch (err) {
         if (isAbortError(err)) return;
-        console.error("[Index] fetchPage error:", err);
         const msg =
           err instanceof Error ? err.message : "Failed to load products";
         setError(msg);
@@ -283,9 +245,41 @@ function Index() {
       sortField,
       sortDirection,
       appliedFilterConfig,
-      cache,
-      currentCacheKey,
     ],
+  );
+
+  const fetchStatsOnly = useCallback(
+    async (opts = {}) => {
+      const { filters = appliedFilterConfig, storeIdsOverride } = opts;
+      const effectiveStoreIds = storeIdsOverride ?? storeIds;
+
+      if (!userId) return;
+      if (!effectiveStoreIds || effectiveStoreIds.length === 0) return;
+
+      // ✅ abort only STATS request
+      if (statsAbortRef.current) statsAbortRef.current.abort();
+      const controller = new AbortController();
+      statsAbortRef.current = controller;
+
+      try {
+        const statsResult = await queryProductStats({
+          userId,
+          storeIds: effectiveStoreIds,
+          organizationId: activeOrganizationId || undefined,
+          filterConfig: filters,
+          signal: controller.signal,
+        });
+
+        if (controller.signal.aborted) return;
+
+        setStats(statsResult);
+        lastStatsFetchAtRef.current = Date.now();
+      } catch (err) {
+        if (isAbortError(err)) return;
+        console.error("[Index] fetchStatsOnly error:", err);
+      }
+    },
+    [userId, storeIds, activeOrganizationId, appliedFilterConfig],
   );
 
   const fetchPageRef = useRef(fetchPage);
@@ -432,12 +426,18 @@ function Index() {
   }, [storesKey, isLoadingStores, checkSyncAndLoad]);
 
   // Refetch on pagination / sort / filter changes
+  // Pagination / sorting → load table data
   useEffect(() => {
     if (isInitialLoading) return;
     if (storeIds.length === 0) return;
-    fetchPage({ includeStats: true });
+    fetchPage();
   }, [pageIndex, pageSize, sortField, sortDirection, appliedFilterConfig]);
 
+  // ✅ Stats refresh (runs when store selection or filters change)
+  useEffect(() => {
+    if (storeIds.length === 0) return;
+    fetchStatsOnly({ showPageLoader: false });
+  }, [storesKey, appliedFilterConfig, fetchStatsOnly]);
   // 30-minute periodic sync check
   useEffect(() => {
     const id = setInterval(
