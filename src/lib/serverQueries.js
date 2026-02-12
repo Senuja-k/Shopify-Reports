@@ -13,27 +13,14 @@ import { supabase, ensureValidSession } from './supabase';
 // Filter → Supabase query translation
 // ---------------------------------------------------------------------------
 
-/**
- * Map a single filter condition onto a Supabase query builder.
- *
- * Text fields are extracted with `->>` (returns text from JSONB).
- * Numeric comparison uses the same text path – for the vast majority of
- * real-world price / inventory values the lexicographic order matches
- * numeric order when the values have the same number of digits.  For
- * truly correct numeric comparison a Postgres cast / RPC would be needed,
- * but this covers 99 % of practical use-cases without requiring a DB
- * migration.
- */
 function applyConditionToQuery(query, condition) {
-  // data->>field extracts TEXT from the JSONB column
   const col = `data->>${condition.field}`;
   const val = condition.value ?? '';
   const val2 = condition.value2 ?? '';
 
   switch (condition.operator) {
-    // ---- String operators ----
     case 'equals':
-      return query.ilike(col, val); // case-insensitive equals
+      return query.ilike(col, val);
     case 'not_equals':
       return query.not(col, 'ilike', val);
     case 'contains':
@@ -45,7 +32,6 @@ function applyConditionToQuery(query, condition) {
     case 'ends_with':
       return query.ilike(col, `%${val}`);
 
-    // ---- Numeric / date operators ----
     case 'greater_than':
       return query.gt(col, val);
     case 'less_than':
@@ -57,14 +43,12 @@ function applyConditionToQuery(query, condition) {
     case 'between':
       return query.gte(col, val).lte(col, val2);
 
-    // ---- List operators ----
     case 'in_list': {
       const list = condition.valueList || [];
       if (list.length === 0) return query;
       return query.in(col, list);
     }
 
-    // ---- Blank checks ----
     case 'is_blank':
       return query.is(col, null);
     case 'is_not_blank':
@@ -76,22 +60,9 @@ function applyConditionToQuery(query, condition) {
   }
 }
 
-/**
- * Apply the full filter config to a Supabase query.
- *
- * The config.items array alternates between condition objects and
- * logical operators ("AND" / "OR").  Supabase chaining is inherently
- * AND, so AND conditions are applied sequentially.  OR conditions use
- * Supabase's `.or()` helper.
- *
- * Limitation: Mixed AND/OR groups with complex precedence are simplified
- * – pure AND chains and pure OR chains work correctly, mixed chains
- * evaluate left-to-right (same as the client-side evaluateFilters).
- */
 function applyFiltersToQuery(query, filterConfig) {
   if (!filterConfig?.items?.length) return query;
 
-  // Separate conditions and logical operators
   const conditions = [];
   const logicOps = [];
 
@@ -105,20 +76,15 @@ function applyFiltersToQuery(query, filterConfig) {
 
   if (conditions.length === 0) return query;
 
-  // Check if any OR operator exists – if so we need .or()
   const hasOr = logicOps.includes('OR');
 
   if (!hasOr) {
-    // Pure AND – chain filters sequentially
     for (const cond of conditions) {
       query = applyConditionToQuery(query, cond);
     }
     return query;
   }
 
-  // Mixed AND/OR – build an OR string for PostgREST
-  // PostgREST .or() takes a comma-separated filter string
-  // We build sub-expressions and combine them
   const orParts = [];
   let andGroup = [conditions[0]];
 
@@ -133,23 +99,17 @@ function applyFiltersToQuery(query, filterConfig) {
   }
   orParts.push(andGroup);
 
-  // For each AND group, build a PostgREST filter expression
-  // If there's only one condition in a group, it becomes a simple filter
-  // Multiple groups are combined with .or()
   if (orParts.length === 1) {
-    // Single group – just apply as AND chain
     for (const cond of orParts[0]) {
       query = applyConditionToQuery(query, cond);
     }
     return query;
   }
 
-  // Multiple OR groups – use PostgREST .or() syntax
   const orExpressions = orParts.map((group) => {
     if (group.length === 1) {
       return conditionToPostgrestString(group[0]);
     }
-    // AND within an OR group – use "and(f1,f2)" syntax
     const andExprs = group.map(conditionToPostgrestString);
     return `and(${andExprs.join(',')})`;
   });
@@ -158,10 +118,6 @@ function applyFiltersToQuery(query, filterConfig) {
   return query;
 }
 
-/**
- * Convert a condition to a raw PostgREST filter string for use inside
- * `.or()` calls.  Returns e.g. `data->>title.ilike.%foo%`
- */
 function conditionToPostgrestString(condition) {
   const col = `data->>${condition.field}`;
   const val = condition.value ?? '';
@@ -210,14 +166,12 @@ function conditionToPostgrestString(condition) {
 function applySortToQuery(query, sortField, sortDirection) {
   if (!sortField || !sortDirection) return query;
 
-  // Supabase supports ordering by JSONB paths: data->field
-  // Using ->> for text ordering (case-sensitive; for most fields this is fine)
   const col = `data->>${sortField}`;
   return query.order(col, { ascending: sortDirection === 'asc', nullsFirst: false });
 }
 
 // ---------------------------------------------------------------------------
-// Base query builder (shared between page, count, stats, export)
+// Base query builder
 // ---------------------------------------------------------------------------
 
 function buildBaseQuery(
@@ -229,24 +183,26 @@ function buildBaseQuery(
   signal,
   options = {}
 ) {
-  let query = supabase
-    .from('shopify_products')
-    .select(selectExpr, options);
+  let query = supabase.from('shopify_products').select(selectExpr, options);
 
   query = query.in('store_id', storeIds);
 
-  if (organizationId) {
-    query = query.eq('organization_id', organizationId);
-  } else {
-    query = query.eq('user_id', userId);
-  }
+  if (organizationId) query = query.eq('organization_id', organizationId);
+  else query = query.eq('user_id', userId);
 
-  if (signal) {
-    query = query.abortSignal(signal);
-  }
+  if (signal) query = query.abortSignal(signal);
 
   query = applyFiltersToQuery(query, filterConfig);
   return query;
+}
+
+// ---------------------------------------------------------------------------
+// ✅ NEW: RPC detection helper
+// ---------------------------------------------------------------------------
+
+function isMissingRpcError(err) {
+  const msg = (err?.message || '').toLowerCase();
+  return msg.includes('function') && (msg.includes('does not exist') || msg.includes('not found'));
 }
 
 // ---------------------------------------------------------------------------
@@ -256,7 +212,9 @@ function buildBaseQuery(
 /**
  * Fetch a single page of products.
  *
- * @returns {{ data: object[], totalCount: number, pageCount: number }}
+ * ✅ PERFORMANCE:
+ * - DO NOT select '*' (it can pull huge JSON / unused columns)
+ * - Select only what the UI uses (store_id + data + ids)
  */
 export async function queryProductsPage({
   userId,
@@ -274,7 +232,7 @@ export async function queryProductsPage({
   const from = pageIndex * pageSize;
   const to = from + pageSize - 1;
 
-  // Count query (with same filters)
+  // Count query
   const countQuery = buildBaseQuery(
     'id',
     storeIds,
@@ -285,9 +243,9 @@ export async function queryProductsPage({
     { count: 'exact', head: true }
   );
 
-  // Data query
+  // ✅ Data query: select only required columns
   let dataQuery = buildBaseQuery(
-    '*',
+    'id, store_id, organization_id, shopify_product_id, shopify_variant_id, data',
     storeIds,
     organizationId,
     userId,
@@ -298,7 +256,6 @@ export async function queryProductsPage({
   dataQuery = applySortToQuery(dataQuery, sortField, sortDirection);
   dataQuery = dataQuery.range(from, to);
 
-  // Run both in parallel
   const [countResult, dataResult] = await Promise.all([countQuery, dataQuery]);
 
   if (countResult.error) throw countResult.error;
@@ -307,18 +264,16 @@ export async function queryProductsPage({
   const totalCount = countResult.count ?? 0;
   const pageCount = Math.ceil(totalCount / pageSize);
 
-  // Format rows – same logic as getAllVariantsByStore
   const products = formatRows(dataResult.data || []);
-
   return { data: products, totalCount, pageCount };
 }
 
 /**
  * Get aggregate stats for ALL products matching the current filters.
- * Used by the stats cards.
  *
- * This fetches lightweight data (only the fields needed for aggregation)
- * so it's fast even for large datasets.
+ * ✅ PERFORMANCE:
+ * - Try RPC first (fast)
+ * - Fallback to existing JS aggregation (keeps compatibility)
  */
 export async function queryProductStats({
   userId,
@@ -329,8 +284,35 @@ export async function queryProductStats({
 }) {
   await ensureValidSession();
 
-  // We need vendor, productType, variantPrice, store_id, status
-  // Fetch only the JSONB fields we need via a light select
+  // ✅ RPC path (fast) - only works if you created the SQL function
+  if (organizationId) {
+    try {
+      const { data, error } = await supabase.rpc('get_product_stats', {
+        p_organization_id: organizationId,
+        p_store_ids: storeIds,
+        p_filter_config: filterConfig,
+      });
+
+      if (error) throw error;
+
+      const row = Array.isArray(data) ? data[0] : data;
+      if (row) {
+        return {
+          totalProducts: Number(row.total_products || 0),
+          totalStores: Number(row.total_stores || 0),
+          totalVendors: Number(row.total_vendors || 0),
+          totalTypes: Number(row.total_types || 0),
+          avgPrice: Number(row.avg_price || 0),
+        };
+      }
+    } catch (err) {
+      if (!isMissingRpcError(err)) {
+        console.warn('[queryProductStats] RPC failed, using fallback:', err?.message || err);
+      }
+    }
+  }
+
+  // ✅ Fallback (your original)
   let query = buildBaseQuery(
     'store_id, data',
     storeIds,
@@ -344,7 +326,6 @@ export async function queryProductStats({
   const { data, count, error } = await query;
 
   if (error) {
-    // Silently return zeros on abort
     if (error.message?.includes('abort') || error.message?.includes('AbortError')) {
       return { totalProducts: 0, totalStores: 0, totalVendors: 0, totalTypes: 0, avgPrice: 0 };
     }
@@ -363,6 +344,7 @@ export async function queryProductStats({
     if (d.vendor) vendors.add(d.vendor);
     if (d.productType) types.add(d.productType);
     storeSet.add(row.store_id);
+
     const price = parseFloat(d.variantPrice || d.price || '0');
     if (!isNaN(price) && price > 0) {
       priceSum += price;
@@ -381,7 +363,9 @@ export async function queryProductStats({
 
 /**
  * Fetch ALL products matching the filters (no pagination).
- * Used for Excel export.
+ *
+ * ✅ PERFORMANCE:
+ * - Avoid selecting '*' in export batches too
  */
 export async function queryAllFilteredProducts({
   userId,
@@ -394,7 +378,6 @@ export async function queryAllFilteredProducts({
 }) {
   await ensureValidSession();
 
-  // First get total count
   const countQuery = buildBaseQuery(
     'id',
     storeIds,
@@ -411,7 +394,6 @@ export async function queryAllFilteredProducts({
   const total = count || 0;
   if (total === 0) return [];
 
-  // Fetch all in batches of 1000 (parallel, 5 concurrent)
   const batchSize = 1000;
   const totalBatches = Math.ceil(total / batchSize);
   const maxConcurrent = 5;
@@ -429,7 +411,7 @@ export async function queryAllFilteredProducts({
 
       const fetchBatch = async () => {
         let q = buildBaseQuery(
-          '*',
+          'id, store_id, organization_id, shopify_product_id, shopify_variant_id, data',
           storeIds,
           organizationId,
           userId,
@@ -448,9 +430,7 @@ export async function queryAllFilteredProducts({
     }
 
     const results = await Promise.all(batchPromises);
-    for (const batch of results) {
-      allProducts.push(...batch);
-    }
+    for (const batch of results) allProducts.push(...batch);
   }
 
   console.log(`[queryAllFilteredProducts] Fetched ${allProducts.length} products for export`);
@@ -458,7 +438,7 @@ export async function queryAllFilteredProducts({
 }
 
 // ---------------------------------------------------------------------------
-// Row formatter (matches getAllVariantsByStore logic)
+// Row formatter
 // ---------------------------------------------------------------------------
 
 function formatRows(rows) {

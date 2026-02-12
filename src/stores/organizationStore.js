@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { auth } from '@/lib/supabase';
 import { useAuth } from '@/stores/authStore.jsx';
 import {
   addOrganizationMemberByEmail,
@@ -12,39 +11,40 @@ import {
   updateOrganizationMemberRole,
 } from '@/lib/supabase-utils';
 
-export const useOrganization = create(
+export const useOrganization = create()(
   persist(
     (set, get) => ({
       organizations: [],
       activeOrganizationId: null,
       members: [],
       isLoading: false,
+      error: null,
 
-      loadOrganizations: async () => {
-        // Prevent concurrent calls
-        if (get().isLoading) {
+      loadOrganizations: async (options = {}) => {
+        const { force = false } = options;
+
+        if (get().isLoading && !force) {
           console.log('[organizationStore] loadOrganizations already in progress, skipping');
           return;
         }
-        // Only load if authenticated
-        const isAuthenticated = useAuth.getState().isAuthenticated;
+
+        const { isAuthenticated, user } = useAuth.getState();
         if (!isAuthenticated) {
-          console.log('[organizationStore] Not authenticated, skipping loadOrganizations');
-          set({ organizations: [], activeOrganizationId: null, isLoading: false });
+          console.log('[organizationStore] Not authenticated, clearing organizations');
+          set({ organizations: [], activeOrganizationId: null, members: [], isLoading: false, error: null });
           return;
         }
-        set({ isLoading: true });
+
+        set({ isLoading: true, error: null });
+
         try {
-          const session = await auth.getSession();
-          const user = session.data.session?.user;
           if (!user) {
-            set({ organizations: [], activeOrganizationId: null, isLoading: false });
+            console.log('[organizationStore] No user yet, skipping org fetch');
             return;
           }
 
           let organizations = await getOrganizationsForUser(user.id);
 
-          // Auto-create a default organization for new users
           if (organizations.length === 0) {
             console.log('[loadOrganizations] No organizations found, creating default organization...');
             try {
@@ -53,154 +53,154 @@ export const useOrganization = create(
               console.log('[loadOrganizations] Default organization created:', defaultOrg.id);
             } catch (createError) {
               console.error('[loadOrganizations] Failed to create default organization:', createError);
-              // Continue without organization - user can create one manually
             }
           }
 
           let activeOrganizationId = get().activeOrganizationId;
-
           if (!activeOrganizationId || !organizations.find((org) => org.id === activeOrganizationId)) {
             activeOrganizationId = organizations[0]?.id || null;
           }
 
-          set({ organizations: organizations, activeOrganizationId: activeOrganizationId, isLoading: false });
-          
-          // Load stores for the active organization after organizations are loaded
+          set({ organizations, activeOrganizationId });
+
           if (activeOrganizationId) {
-            console.log('[organizationStore] Organizations loaded, loading stores for org:', activeOrganizationId);
             const { useStoreManagement } = await import('./storeManagement');
-            useStoreManagement.getState().loadStores();
+            useStoreManagement.getState().loadStores({ organizationId: activeOrganizationId, force: true });
           }
         } catch (error) {
           console.error('Error loading organizations:', error);
+          set({ error: error?.message || 'Failed to load organizations' });
+        } finally {
           set({ isLoading: false });
         }
       },
 
-      setActiveOrganization: (organizationId) => {
+      setActiveOrganization: async (organizationId) => {
         const currentOrgId = get().activeOrganizationId;
         set({ activeOrganizationId: organizationId });
-        // If actually switching, just update state; let UI react to org change
-        if (currentOrgId && currentOrgId !== organizationId) {
-          console.log('[organizationStore] Organization switched, updating state (no full page reload)');
+
+        if (currentOrgId !== organizationId) {
+          const { useStoreManagement } = await import('./storeManagement');
+          if (organizationId) {
+            useStoreManagement.getState().loadStores({ organizationId, force: true });
+          } else {
+            useStoreManagement.getState().clearStores();
+          }
         }
       },
 
       createOrganization: async (name) => {
-        if (!name.trim()) {
-          throw new Error('Organization name is required');
-        }
+        if (!name.trim()) throw new Error('Organization name is required');
 
-        set({ isLoading: true });
+        set({ isLoading: true, error: null });
         try {
-          const session = await auth.getSession();
-          const user = session.data.session?.user;
-          if (!user) {
-            throw new Error('User not authenticated');
-          }
+          const { user } = useAuth.getState();
+          if (!user) throw new Error('User not authenticated');
 
           const organization = await createOrganizationForUser(user.id, name.trim());
           const organizations = [...get().organizations, organization];
 
-          set({
-            organizations: organizations,
-            activeOrganizationId: organization.id,
-            isLoading: false,
-          });
+          set({ organizations, activeOrganizationId: organization.id });
+
+          const { useStoreManagement } = await import('./storeManagement');
+          useStoreManagement.getState().loadStores({ organizationId: organization.id, force: true });
         } catch (error) {
-          set({ isLoading: false });
+          set({ error: error?.message || 'Failed to create organization' });
           throw error;
+        } finally {
+          set({ isLoading: false });
         }
       },
 
       loadMembers: async (organizationId) => {
-        set({ isLoading: true });
+        set({ isLoading: true, error: null });
         try {
           const members = await getOrganizationMembers(organizationId);
-          set({ members: members, isLoading: false });
+          set({ members });
         } catch (error) {
           console.error('Error loading organization members:', error);
+          set({ error: error?.message || 'Failed to load members' });
+        } finally {
           set({ isLoading: false });
         }
       },
 
       addMemberByEmail: async (organizationId, email, role) => {
-        set({ isLoading: true });
+        set({ isLoading: true, error: null });
         try {
           await addOrganizationMemberByEmail(organizationId, email, role);
           const members = await getOrganizationMembers(organizationId);
-          set({ members: members, isLoading: false });
+          set({ members });
         } catch (error) {
-          set({ isLoading: false });
+          set({ error: error?.message || 'Failed to add member' });
           throw error;
+        } finally {
+          set({ isLoading: false });
         }
       },
 
       updateMemberRole: async (organizationId, userId, role) => {
-        set({ isLoading: true });
+        set({ isLoading: true, error: null });
         try {
           await updateOrganizationMemberRole(organizationId, userId, role);
           const members = await getOrganizationMembers(organizationId);
-          set({ members: members, isLoading: false });
+          set({ members });
         } catch (error) {
-          set({ isLoading: false });
+          set({ error: error?.message || 'Failed to update member' });
           throw error;
+        } finally {
+          set({ isLoading: false });
         }
       },
 
       removeMember: async (organizationId, userId) => {
-        set({ isLoading: true });
+        set({ isLoading: true, error: null });
         try {
           await removeOrganizationMember(organizationId, userId);
           const members = await getOrganizationMembers(organizationId);
-          set({ members: members, isLoading: false });
+          set({ members });
         } catch (error) {
-          set({ isLoading: false });
+          set({ error: error?.message || 'Failed to remove member' });
           throw error;
+        } finally {
+          set({ isLoading: false });
         }
       },
 
       deleteOrganization: async (organizationId) => {
-        const session = await auth.getSession();
-        const user = session.data.session?.user;
-        if (!user) {
-          throw new Error('User not authenticated');
-        }
+        const { user } = useAuth.getState();
+        if (!user) throw new Error('User not authenticated');
 
-        set({ isLoading: true });
+        set({ isLoading: true, error: null });
         try {
           await deleteOrganizationFromSupabase(user.id, organizationId);
-          
-          // Remove from local state
-          const orgs = get().organizations.filter(org => org.id !== organizationId);
+
+          const orgs = get().organizations.filter((org) => org.id !== organizationId);
           const currentActiveId = get().activeOrganizationId;
-          const newActiveId = currentActiveId === organizationId 
-            ? (orgs[0]?.id || null) 
-            : currentActiveId;
-          
-          set({ 
-            organizations: orgs, 
+          const newActiveId = currentActiveId === organizationId ? (orgs[0]?.id || null) : currentActiveId;
+
+          set({
+            organizations: orgs,
             activeOrganizationId: newActiveId,
             members: currentActiveId === organizationId ? [] : get().members,
-            isLoading: false 
           });
 
-          // Clear stores if the deleted org was active
-          if (newActiveId !== organizationId) {
-            const { useStoreManagement } = await import('./storeManagement');
-            useStoreManagement.getState().loadStores();
+          const { useStoreManagement } = await import('./storeManagement');
+          if (newActiveId) {
+            useStoreManagement.getState().loadStores({ organizationId: newActiveId, force: true });
           } else {
-            const { useStoreManagement } = await import('./storeManagement');
             useStoreManagement.getState().clearStores();
           }
         } catch (error) {
-          set({ isLoading: false });
+          set({ error: error?.message || 'Failed to delete organization' });
           throw error;
+        } finally {
+          set({ isLoading: false });
         }
       },
 
       clearOrganizations: () => {
-        set({ organizations: [], activeOrganizationId: null, members: [], isLoading: false });
+        set({ organizations: [], activeOrganizationId: null, members: [], isLoading: false, error: null });
       },
     }),
     {
@@ -210,9 +210,7 @@ export const useOrganization = create(
         activeOrganizationId: state.activeOrganizationId,
       }),
       onRehydrateStorage: () => (state) => {
-        if (state) {
-          state.isLoading = false;
-        }
+        if (state) state.isLoading = false;
       },
     }
   )
