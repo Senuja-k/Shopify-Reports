@@ -25,7 +25,6 @@ import { useAuth } from "@/stores/authStore.jsx";
 import { useLocation } from "react-router-dom";
 import { useProductsPageCacheStore } from "@/stores/productsPageCacheStore";
 
-
 // Helper function to check if an error is an AbortError
 function isAbortError(error) {
   if (error instanceof DOMException && error.name === "AbortError") return true;
@@ -80,9 +79,23 @@ function Index() {
   const lastSyncAt = useProductsStore((state) => state.lastSyncAt);
   const setLastSyncAt = useProductsStore((state) => state.setLastSyncAt);
 
+  // ✅ NEW: background sync indicator for header
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // Refs
   const abortControllerRef = useRef(null);
   const syncCheckRef = useRef(null);
   const lastRouteEnterRef = useRef(Date.now());
+
+  // ✅ NEW: prevent double refresh spam on tab return
+  const returnDebounceRef = useRef(0);
+  const tabRefreshInFlightRef = useRef(false);
+
+  // ✅ NEW: freshness tracking to avoid unnecessary work
+  const lastDataFetchAtRef = useRef(0);
+  const lastStatsFetchAtRef = useRef(0);
+  const DATA_STALE_MS = 15 * 1000; // 15s
+  const STATS_STALE_MS = 60 * 1000; // 60s
 
   const location = useLocation();
 
@@ -91,7 +104,7 @@ function Index() {
     selectedStoreId,
     viewMode,
     isLoading: isLoadingStores,
-    error: storesError,
+    error: storesError, // optional
   } = useStoreManagement();
 
   const activeOrganizationId = useOrganization(
@@ -100,7 +113,7 @@ function Index() {
   const { user, isAuthenticated } = useAuth();
   const userId = user?.id || null;
 
-  // ---- cache store ----
+  // Cache store (instant restore after reload/back)
   const cache = useProductsPageCacheStore();
 
   // Stores to query
@@ -119,7 +132,7 @@ function Index() {
   );
   const storesKey = useMemo(() => [...storeIds].sort().join(","), [storeIds]);
 
-  // ✅ Cache key for instant restore
+  // Cache key for instant restore
   const currentCacheKey = useMemo(() => {
     return JSON.stringify({
       org: activeOrganizationId || null,
@@ -140,10 +153,7 @@ function Index() {
     pageSize,
   ]);
 
-  const [isSyncing, setIsSyncing] = useState(false);
-
-
-  // ✅ Instant paint from cache (reload/back)
+  // ✅ Instant paint from cache on reload/back
   useEffect(() => {
     if (cache.cacheKey === currentCacheKey && cache.pageProducts?.length > 0) {
       setPageProducts(cache.pageProducts);
@@ -155,7 +165,7 @@ function Index() {
   }, [cache.cacheKey, currentCacheKey]);
 
   // -------------------------------------------------------------------
-  // Fetch a page of products + stats
+  // Fetch a page of products + (optional) stats
   // -------------------------------------------------------------------
   const fetchPage = useCallback(
     async (opts = {}) => {
@@ -166,6 +176,7 @@ function Index() {
         dir = sortDirection,
         filters = appliedFilterConfig,
         showPageLoader = true,
+        includeStats = true, // ✅ NEW
         storeIdsOverride,
         storesToFetchOverride,
       } = opts;
@@ -178,10 +189,8 @@ function Index() {
         return;
       }
 
-      // ✅ Don’t clear UI if stores not ready yet
+      // ✅ IMPORTANT: do NOT blank UI if storeIds temporarily empty
       if (!effectiveStoreIds || effectiveStoreIds.length === 0) {
-        setIsLoadingPage(false);
-        setIsInitialLoading(false);
         return;
       }
 
@@ -194,7 +203,7 @@ function Index() {
       setError(null);
 
       try {
-        const [pageResult, statsResult] = await Promise.all([
+        const promises = [
           queryProductsPage({
             userId,
             storeIds: effectiveStoreIds,
@@ -206,14 +215,23 @@ function Index() {
             pageSize: size,
             signal: controller.signal,
           }),
-          queryProductStats({
-            userId,
-            storeIds: effectiveStoreIds,
-            organizationId: activeOrganizationId || undefined,
-            filterConfig: filters,
-            signal: controller.signal,
-          }),
-        ]);
+        ];
+
+        if (includeStats) {
+          promises.push(
+            queryProductStats({
+              userId,
+              storeIds: effectiveStoreIds,
+              organizationId: activeOrganizationId || undefined,
+              filterConfig: filters,
+              signal: controller.signal,
+            }),
+          );
+        }
+
+        const results = await Promise.all(promises);
+        const pageResult = results[0];
+        const statsResult = includeStats ? results[1] : null;
 
         if (controller.signal.aborted) return;
 
@@ -225,14 +243,19 @@ function Index() {
 
         setPageProducts(products);
         setTotalCount(pageResult.totalCount);
-        setStats(statsResult);
+        lastDataFetchAtRef.current = Date.now();
 
-        // ✅ Save to cache for instant next load
+        if (includeStats && statsResult) {
+          setStats(statsResult);
+          lastStatsFetchAtRef.current = Date.now();
+        }
+
+        // Save to cache (instant next load)
         cache.setCache({
           cacheKey: currentCacheKey,
           pageProducts: products,
           totalCount: pageResult.totalCount,
-          stats: statsResult,
+          stats: includeStats && statsResult ? statsResult : cache.stats,
         });
       } catch (err) {
         if (isAbortError(err)) return;
@@ -271,132 +294,148 @@ function Index() {
   }, [fetchPage]);
 
   // -------------------------------------------------------------------
-  // Ensure stores exist, then fetch
+  // Ensure stores are loaded, then fetch using latest store state
   // -------------------------------------------------------------------
-  const ensureStoresThenFetch = useCallback(async () => {
-    if (!isAuthenticated || !userId) return;
+  const ensureStoresThenFetch = useCallback(
+    async ({ includeStats = true, forceReloadStores = false } = {}) => {
+      if (!isAuthenticated || !userId) return;
 
-    // Load stores if empty
-    if (
-      useStoreManagement.getState().stores.length === 0 &&
-      !useStoreManagement.getState().isLoading
-    ) {
-      try {
-        await useStoreManagement
-          .getState()
-          .loadStores({
+      const sm = useStoreManagement.getState();
+
+      if ((forceReloadStores || sm.stores.length === 0) && !sm.isLoading) {
+        try {
+          await sm.loadStores({
             organizationId: activeOrganizationId ?? undefined,
             force: true,
           });
-      } catch (e) {
-        console.error("[Index] ensureStoresThenFetch loadStores failed:", e);
+        } catch (e) {
+          console.error("[Index] ensureStoresThenFetch loadStores failed:", e);
+        }
       }
-    }
 
-    // Read latest
-    const latestStores = useStoreManagement.getState().stores || [];
-    const latestSelectedStoreId = useStoreManagement.getState().selectedStoreId;
-    const latestViewMode = useStoreManagement.getState().viewMode;
+      const latestStores = useStoreManagement.getState().stores || [];
+      const latestSelectedStoreId =
+        useStoreManagement.getState().selectedStoreId;
+      const latestViewMode = useStoreManagement.getState().viewMode;
 
-    const latestStoresToFetch = (() => {
-      if (latestViewMode === "combined" && latestSelectedStoreId === null)
+      const latestStoresToFetch = (() => {
+        if (latestViewMode === "combined" && latestSelectedStoreId === null)
+          return latestStores;
+        if (latestSelectedStoreId) {
+          const st = latestStores.find((s) => s.id === latestSelectedStoreId);
+          return st ? [st] : [];
+        }
         return latestStores;
-      if (latestSelectedStoreId) {
-        const st = latestStores.find((s) => s.id === latestSelectedStoreId);
-        return st ? [st] : [];
-      }
-      return latestStores;
-    })();
+      })();
 
-    const latestStoreIds = latestStoresToFetch.map((s) => s.id);
-    if (latestStoreIds.length === 0) return;
+      const latestStoreIds = latestStoresToFetch.map((s) => s.id);
+      if (latestStoreIds.length === 0) return;
 
-    await fetchPageRef.current({
-      showPageLoader: false,
-      storeIdsOverride: latestStoreIds,
-      storesToFetchOverride: latestStoresToFetch,
-    });
-  }, [isAuthenticated, userId, activeOrganizationId]);
+      await fetchPageRef.current({
+        showPageLoader: false,
+        includeStats,
+        storeIdsOverride: latestStoreIds,
+        storesToFetchOverride: latestStoresToFetch,
+      });
+    },
+    [isAuthenticated, userId, activeOrganizationId],
+  );
 
   // Route enter refresh
   useEffect(() => {
     lastRouteEnterRef.current = Date.now();
-    ensureStoresThenFetch();
+    ensureStoresThenFetch({ includeStats: true });
   }, [location.pathname, ensureStoresThenFetch]);
 
   // -------------------------------------------------------------------
-  // ✅ Non-blocking sync (big speed win)
+  // ✅ Non-blocking sync: show products first, sync in background
   // -------------------------------------------------------------------
   const checkSyncAndLoad = useCallback(
-  async (forceSync = false) => {
-    if (!userId || storeIds.length === 0) {
-      setIsInitialLoading(false);
-      return;
-    }
-
-    setIsInitialLoading(true);
-
-    try {
-      // ✅ 1) show data first
-      await fetchPageRef.current({ page: 0, showPageLoader: false });
-
-      // ✅ 2) decide sync
-      const orgLastSync = await getOrgLastSyncTime(activeOrganizationId, storeIds);
-      const shouldSync = forceSync || isOrgSyncDue(orgLastSync);
-
-      if (orgLastSync) setLastSyncAt(orgLastSync);
-
-      // ✅ 3) sync in background (do not await)
-      if (shouldSync) {
-        console.log('[Index] Sync due -> background sync starting');
-        setIsSyncing(true);
-
-        syncStoresProductsFull(userId, storesToFetch, activeOrganizationId || undefined)
-          .then(() => {
-            console.log('[Index] Background sync finished -> refreshing page');
-            setLastSyncAt(new Date().toISOString());
-            return fetchPageRef.current({ page: 0, showPageLoader: false });
-          })
-          .catch((e) => {
-            console.error('[Index] Background sync failed:', e);
-            toast({
-              title: 'Sync failed',
-              description: e instanceof Error ? e.message : 'Could not sync stores.',
-              variant: 'destructive',
-            });
-          })
-          .finally(() => {
-            setIsSyncing(false);
-          });
+    async (forceSync = false) => {
+      if (!userId || storeIds.length === 0) {
+        setIsInitialLoading(false);
+        return;
       }
-    } catch (err) {
-      if (!isAbortError(err)) {
-        console.error('[Index] checkSyncAndLoad error:', err);
-        setError(err instanceof Error ? err.message : 'Failed to load');
+
+      setIsInitialLoading(true);
+
+      try {
+        // Show products immediately
+        await fetchPageRef.current({
+          page: typeof pageIndex === "number" ? pageIndex : 0,
+          showPageLoader: false,
+          includeStats: true,
+        });
+
+        const orgLastSync = await getOrgLastSyncTime(
+          activeOrganizationId,
+          storeIds,
+        );
+        const shouldSync = forceSync || isOrgSyncDue(orgLastSync);
+
+        if (orgLastSync) setLastSyncAt(orgLastSync);
+
+        if (shouldSync) {
+          setIsSyncing(true);
+          syncStoresProductsFull(
+            userId,
+            storesToFetch,
+            activeOrganizationId || undefined,
+          )
+            .then(() => {
+              setLastSyncAt(new Date().toISOString());
+              return fetchPageRef.current({
+                page: pageIndex,
+                showPageLoader: false,
+                includeStats: true,
+              });
+            })
+            .catch((e) => {
+              console.error("[Index] Background sync failed:", e);
+              toast({
+                title: "Sync failed",
+                description:
+                  e instanceof Error ? e.message : "Could not sync stores.",
+                variant: "destructive",
+              });
+            })
+            .finally(() => setIsSyncing(false));
+        }
+      } catch (err) {
+        if (!isAbortError(err)) {
+          console.error("[Index] checkSyncAndLoad error:", err);
+          setError(err instanceof Error ? err.message : "Failed to load");
+        }
+      } finally {
+        setIsInitialLoading(false);
       }
-    } finally {
-      setIsInitialLoading(false);
-    }
-  },
-  [userId, storeIds, storesToFetch, activeOrganizationId, setLastSyncAt]
-);
+    },
+    [
+      userId,
+      storeIds,
+      storesToFetch,
+      activeOrganizationId,
+      setLastSyncAt,
+      pageIndex,
+    ],
+  );
 
-
-  // Load first page when stores are ready
+  // When stores are ready, do initial load/sync check
   useEffect(() => {
     if (isLoadingStores) return;
     if (storeIds.length > 0) {
       checkSyncAndLoad(false);
     } else {
+      // don't blank UI
       setIsInitialLoading(false);
     }
   }, [storesKey, isLoadingStores, checkSyncAndLoad]);
 
-  // Refetch page when pagination / sort / filter changes
+  // Refetch on pagination / sort / filter changes
   useEffect(() => {
     if (isInitialLoading) return;
     if (storeIds.length === 0) return;
-    fetchPage();
+    fetchPage({ includeStats: true });
   }, [pageIndex, pageSize, sortField, sortDirection, appliedFilterConfig]);
 
   // 30-minute periodic sync check
@@ -414,29 +453,30 @@ function Index() {
     syncCheckRef.current = checkSyncAndLoad;
   }, [checkSyncAndLoad]);
 
-  // Visibility/focus refresh
+  // ✅ Tab return handler (stable + no blank UI + avoids heavy stats every time)
   useEffect(() => {
-    const onVisible = async () => {
-      if (document.visibilityState !== "visible") return;
-      const now = Date.now();
-      if (now - lastRouteEnterRef.current < 250) return;
-      await ensureStoresThenFetch();
+    const onReturn = async () => {
+      if (document.visibilityState && document.visibilityState !== "visible")
+        return;
+
+      // ✅ If we already have data, DO NOTHING on tab switch
+      // (prevents table + stats from reloading)
+      if (pageProducts.length > 0 && stats.totalProducts > 0) return;
+
+      // If data is missing (rare), do a light fetch
+      await ensureStoresThenFetch({ includeStats: false });
+
+      // If stats are still missing, fetch them in background
+      if (stats.totalProducts === 0) {
+        setTimeout(() => {
+          fetchPageRef.current({ showPageLoader: false, includeStats: true });
+        }, 250);
+      }
     };
 
-    const onFocus = async () => {
-      const now = Date.now();
-      if (now - lastRouteEnterRef.current < 250) return;
-      await ensureStoresThenFetch();
-    };
-
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", onFocus);
-
-    return () => {
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [ensureStoresThenFetch]);
+    document.addEventListener("visibilitychange", onReturn);
+    return () => document.removeEventListener("visibilitychange", onReturn);
+  }, [ensureStoresThenFetch, pageProducts.length, stats.totalProducts]);
 
   // Table callbacks
   const handlePageChange = useCallback((newPage) => setPageIndex(newPage), []);
@@ -495,9 +535,7 @@ function Index() {
       exportToExcel(withNames, columnsToExport, "shopify-products");
       toast({
         title: "Export successful",
-        description: `Exported ${withNames.length} products${
-          appliedFilterConfig.items.length > 0 ? " matching your filters" : ""
-        } to Excel.`,
+        description: `Exported ${withNames.length} products${appliedFilterConfig.items.length > 0 ? " matching your filters" : ""} to Excel.`,
       });
     } catch (err) {
       console.error("[handleExport] Error:", err);
@@ -519,7 +557,11 @@ function Index() {
     }).format(value);
   };
 
-  const showStoresLoading = isAuthenticated && isLoadingStores;
+  // ✅ Do not show huge skeleton if we already have data
+  const showBigSkeleton = isInitialLoading && pageProducts.length === 0;
+
+  const showStoresLoading =
+    isAuthenticated && isLoadingStores && pageProducts.length === 0;
   const showNoStores =
     isAuthenticated && !isLoadingStores && stores.length === 0;
 
@@ -530,9 +572,9 @@ function Index() {
           <DashboardHeader
             onExport={handleExport}
             onRefresh={() => checkSyncAndLoad(true)}
-            isLoading={isInitialLoading}
-            isExporting={isExporting}
+            isLoading={showBigSkeleton}
             isSyncing={isSyncing}
+            isExporting={isExporting}
             productCount={stats.totalProducts}
             lastSyncAt={lastSyncAt}
           />
@@ -545,7 +587,7 @@ function Index() {
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-4 w-full">
-            {isInitialLoading ? (
+            {showBigSkeleton ? (
               [...Array(5)].map((_, i) => (
                 <Skeleton
                   key={i}
