@@ -6,8 +6,8 @@ export function exportToExcel(
   columns,
   filename = 'shopify-products'
 ) {
-  console.log('[exportToExcel] Starting export with columns:', columns);
-  console.log('[exportToExcel] First column type:', typeof columns[0]);
+  
+  
   
   // Normalize columns: handle both ColumnDefinition objects and string arrays
   const normalizedColumns = columns.map((col) => {
@@ -45,15 +45,15 @@ export function exportToExcel(
     return null;
   }).filter(Boolean); // Remove null entries
 
-  console.log(`[exportToExcel] Normalized ${normalizedColumns.length} columns`);
+  
 
   if (normalizedColumns.length === 0) {
     console.error('[exportToExcel] No valid columns after normalization. Original columns:', columns);
     throw new Error('No valid columns selected for export');
   }
 
-  console.log(`[exportToExcel] Exporting ${products.length} products with columns:`, normalizedColumns.map(c => c.key));
-  console.log(`%c[exportToExcel] 🎯 RECEIVING ${products.length} PRODUCTS TO EXPORT`, 'background: purple; color: white; font-weight: bold; font-size: 14px');
+  
+  
 
   // Build export data using only the selected columns
   const exportData = products.map((product) => {
@@ -86,7 +86,7 @@ export function exportToExcel(
     return row;
   });
   
-  console.log(`%c[exportToExcel] 🎯 EXPORT DATA ROWS: ${exportData.length}`, 'background: maroon; color: white; font-weight: bold; font-size: 14px');
+  
   const worksheet = XLSX.utils.json_to_sheet(exportData);
   const workbook = XLSX.utils.book_new();
   
@@ -104,7 +104,7 @@ export function exportToExcel(
       bookType: 'xlsx',
       type: 'binary'
     });
-    console.log(`Export successful: ${fullFilename}`);
+    
   } catch (error) {
     console.error('Error writing Excel file:', error);
     throw new Error('Failed to download Excel file');

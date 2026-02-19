@@ -12,18 +12,13 @@ export function detectProductFields(products) {
   
   // Sample first product for field detection
   const sample = products[0];
-  console.log('Sample product for field detection:', sample);
-  console.log('Sample product keys:', Object.keys(sample));
   
   // Check if we have Admin API data (has metafields)
-  const hasMetafields = 'metafields' in sample;
   let hasBarcode = false;
   if (sample.variants) {
     const variantArray = Array.isArray(sample.variants) ? sample.variants : (sample.variants).edges?.map((e) => e.node) || [];
     hasBarcode = variantArray.some((v) => v?.hasOwnProperty('barcode'));
   }
-  console.log('Has metafields support:', hasMetafields);
-  console.log('Has barcode support:', hasBarcode);
 
   // Scan first product for basic fields
   const scanObject = (obj, prefix = '', depth = 0) => {
@@ -36,8 +31,6 @@ export function detectProductFields(products) {
       const fullKey = prefix ? `${prefix}.${key}` : key;
 
       if (value === null || value === undefined) continue;
-
-      console.log(`[scanObject] Processing key: ${key}, type: ${typeof value}, isArray: ${Array.isArray(value)}`);
 
       // Detect field type
       if (Array.isArray(value)) {
@@ -78,9 +71,6 @@ export function detectProductFields(products) {
       product.metafields.forEach((meta) => {
         if (meta && meta.key) {
           allMetafieldKeys.add(meta.key);
-          if (index < 5) { // Log first 5 products with metafields for debugging
-            console.log(`[Product ${product.title}] Found metafield: ${meta.namespace}.${meta.key} = ${meta.value}`);
-          }
         }
       });
     }
@@ -89,7 +79,6 @@ export function detectProductFields(products) {
   // Add all discovered metafield keys to fieldMap
   allMetafieldKeys.forEach((key) => {
     const metaKey = `metafield.${key}`;
-    console.log('Adding metafield column:', metaKey);
     fieldMap.set(metaKey, 'string');
   });
 
@@ -108,24 +97,17 @@ export function detectProductFields(products) {
   });
 
   if (hasVariantSku) {
-    console.log('Adding Variant SKU field');
     fieldMap.set('variantSku', 'string');
   }
   if (hasVariantBarcode) {
-    console.log('Adding Variant Barcode field');
     fieldMap.set('variantBarcode', 'string');
   }
   if (hasVariantPrice) {
-    console.log('Adding Variant Price field');
     fieldMap.set('variantPrice', 'currency');
   }
   if (hasCompareAtPrice) {
-    console.log('Adding Compare At Price field');
     fieldMap.set('compareAtPrice', 'currency');
   }
-
-  console.log('Final fieldMap keys:', Array.from(fieldMap.keys()));
-  console.log('fieldMap size:', fieldMap.size);
 
   // Convert to column definitions
   const columns = Array.from(fieldMap.entries()).map(

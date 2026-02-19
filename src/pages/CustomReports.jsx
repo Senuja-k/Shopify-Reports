@@ -107,7 +107,7 @@ export function CustomReports() {
           if (store) {
             isAdmin = !!store.adminToken;
             setUsingAdminApi(isAdmin);
-            console.log('Store config:', { name: store.name, hasAdminToken: !!store.adminToken, hasStorefrontToken: !!store.storefrontToken });
+            
             const syncStatus = await getSyncStatus(user.id, store.id, activeOrganizationId || undefined);
             setLastSyncAt(syncStatus?.last_product_sync_at || null);
             const variants = await getVariantsByStore(user.id, [store.id], {}, activeOrganizationId || undefined);
@@ -280,9 +280,9 @@ export function CustomReports() {
   const handleDeleteReport = async (reportId) => {
     if (confirm('Are you sure you want to delete this report?')) {
       try {
-        console.log('[CustomReports] Deleting report:', reportId);
+        
         await deleteReport(reportId);
-        console.log('[CustomReports] Report deleted successfully');
+        
         toast({ title: 'Report deleted' });
       } catch (error) {
         console.error('[CustomReports] Failed to delete report:', error);

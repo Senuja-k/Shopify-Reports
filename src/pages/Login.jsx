@@ -30,19 +30,19 @@ export default function Login() {
   // Reset loading state when component unmounts to prevent stuck state
   useEffect(() => {
     return () => {
-      console.log('[Login] Component unmounting, resetting loading state');
+      
       setIsLoading(false);
     };
   }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    console.log('[Login] Form submitted, isSignup:', isSignup);
+    
     setIsLoading(true);
 
     try {
       if (isSignup) {
-        console.log('[Login] Checking password match...');
+        
         if (password !== confirmPassword) {
           toast({
             title: 'Passwords do not match',
@@ -53,9 +53,9 @@ export default function Login() {
           return;
         }
 
-        console.log('[Login] Starting signup for:', email);
+        
         await signup(email, password);
-        console.log('[Login] Signup complete. Navigating to dashboard...');
+        
         toast({
           title: 'Account created',
           description: 'Welcome to Shopify Report',

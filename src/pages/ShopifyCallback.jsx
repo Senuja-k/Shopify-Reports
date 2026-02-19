@@ -51,27 +51,27 @@ export default function ShopifyCallback() {
 
         // Check if this is coming from "Add Store" dialog
         const pendingStoreJson = sessionStorage.getItem('pendingStore');
-        console.log('Pending store from session:', pendingStoreJson);
+        
         
         if (pendingStoreJson) {
           try {
             const pendingStore = JSON.parse(pendingStoreJson);
-            console.log('Parsed pending store:', pendingStore);
+            
             // Normalize domain
             let normalizedDomain = pendingStore.domain.toLowerCase();
             if (!normalizedDomain.includes('.myshopify.com')) {
               normalizedDomain = `${normalizedDomain}.myshopify.com`;
             }
             normalizedDomain = normalizedDomain.replace(/^https:\/\//, '');
-            console.log('Normalized domain:', normalizedDomain);
-            console.log('OAuth shop:', shop);
+            
+            
             // Add the store with only admin token from OAuth
             const result = await addStore({
               name: pendingStore.name,
               domain: normalizedDomain,
               adminToken: shopifyStore.accessToken, // Admin token from OAuth exchange
             });
-            console.log('Store added successfully with admin token:', result);
+            
             // Clear pending store
             sessionStorage.removeItem('pendingStore');
           } catch (err) {

@@ -18,11 +18,11 @@ export const useAuth = create()(
       isLoading: false,
       
       initializeAuth: async () => {
-        console.log('[authStore] initializeAuth started');
+        
         set({ isLoading: true });
         try {
           // Get current session with timeout (increased to 15s for slow networks)
-          console.log('[authStore] Getting session with timeout...');
+          
           const { session, timedOut, error } = await initializeAuthWithTimeout(15000);
           
           if (timedOut) {
@@ -45,16 +45,16 @@ export const useAuth = create()(
             return;
           }
           
-          console.log('[authStore] Got session:', session ? 'exists' : 'none');
+          
           
           if (session?.user) {
             // Ensure profile exists (fallback if trigger doesn't fire)
             try {
-              console.log('[authStore] Upserting profile...');
+              
               await supabase
                 .from('profiles')
                 .upsert({ id: session.user.id, email: session.user.email }, { onConflict: 'id' });
-              console.log('[authStore] Profile upsert complete');
+              
             } catch (profileError) {
               console.warn('[authStore] Could not create profile (may already exist or timed out):', profileError);
             }
@@ -65,7 +65,7 @@ export const useAuth = create()(
               name: session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'User',
             };
             set({ user, isAuthenticated: true, isLoading: false });
-            console.log('[authStore] Login complete, user set. isAuthenticated:', true, 'user:', user);
+            
             useOrganization.getState().loadOrganizations();
           } else {
             set({ user: null, isAuthenticated: false, isLoading: false });
@@ -74,18 +74,18 @@ export const useAuth = create()(
 
           // Listen for auth state changes (ensure single subscription)
           if (authSubscription) {
-            console.log('[authStore] Cleaning up existing auth subscription');
+            
             authSubscription.unsubscribe();
             authSubscription = null;
           }
 
-          console.log('[authStore] Setting up auth state listener');
+          
           const { data: subscriptionData } = auth.onAuthStateChange(async (event, session) => {
-            console.log('[authStore] Auth state changed:', event);
+            
             
             // Skip INITIAL_SESSION since we already handled it above
             if (event === 'INITIAL_SESSION') {
-              console.log('[authStore] Skipping INITIAL_SESSION (already handled)');
+              
               return;
             }
             
@@ -117,7 +117,7 @@ export const useAuth = create()(
           // Ignore abort errors - they happen during component re-renders
           const errorMessage = (error)?.message || String(error);
           if (errorMessage.includes('AbortError') || errorMessage.includes('signal is aborted')) {
-            console.log('Auth initialization aborted (likely due to re-render)');
+            
             return;
           }
           console.error('[authStore] Error initializing auth:', error);
@@ -126,7 +126,7 @@ export const useAuth = create()(
       },
 
       login: async (email, password) => {
-        console.log('[authStore] login started for:', email);
+        
         if (!email || !password) {
           throw new Error('Email and password are required');
         }
@@ -139,12 +139,12 @@ export const useAuth = create()(
 
         set({ isLoading: true });
         try {
-          console.log('[authStore] Calling signInWithPassword...');
+          
           const { data, error } = await auth.signInWithPassword({
             email,
             password,
           });
-          console.log('[authStore] signInWithPassword complete');
+          
 
           if (error) {
             // Handle specific Supabase auth errors
@@ -161,14 +161,14 @@ export const useAuth = create()(
           }
 
           if (data.user) {
-            console.log('[authStore] User logged in:', data.user.id);
+            
             // Ensure profile exists (fallback if trigger doesn't fire) - don't await, do in background
             (async () => {
               try {
                 await supabase
                   .from('profiles')
                   .upsert({ id: data.user.id, email: data.user.email }, { onConflict: 'id' });
-                console.log('[authStore] Profile upserted');
+                
               } catch (profileError) {
                 console.warn('[authStore] Could not create profile:', profileError);
               }
@@ -180,7 +180,7 @@ export const useAuth = create()(
               name: data.user.user_metadata?.name || email.split('@')[0],
             };
             set({ user, isAuthenticated: true, isLoading: false });
-            console.log('[authStore] Login complete, user set');
+            
           }
         } catch (error) {
           console.error('[authStore] Login error:', error);
@@ -195,7 +195,7 @@ export const useAuth = create()(
       },
 
       signup: async (email, password) => {
-        console.log('[authStore] signup started for:', email);
+        
         if (!email || !password) {
           throw new Error('Email and password are required');
         }
@@ -208,7 +208,7 @@ export const useAuth = create()(
 
         set({ isLoading: true });
         try {
-          console.log('[authStore] Calling auth.signUp...');
+          
           const { data, error } = await auth.signUp({
             email,
             password,
@@ -217,7 +217,7 @@ export const useAuth = create()(
             },
           });
           
-          console.log('[authStore] signUp complete, user:', data?.user?.id, 'session:', !!data?.session);
+          
 
           if (error) {
             console.error('[authStore] Supabase signup error:', error.message);
@@ -231,14 +231,14 @@ export const useAuth = create()(
           }
 
           if (data.user) {
-            console.log('[authStore] User created, creating profile in background...');
+            
             // Create profile in background (don't await)
             (async () => {
               try {
                 await supabase
                   .from('profiles')
                   .upsert({ id: data.user.id, email: data.user.email }, { onConflict: 'id' });
-                console.log('[authStore] Profile created');
+                
               } catch (profileError) {
                 console.warn('[authStore] Could not create profile:', profileError);
               }
@@ -246,7 +246,7 @@ export const useAuth = create()(
 
             // If email confirmation is disabled in Supabase, user is immediately confirmed
             if (data.session) {
-              console.log('[authStore] Session exists - user is authenticated immediately');
+              
               const user = {
                 id: data.user.id,
                 email: data.user.email || '',
@@ -254,12 +254,12 @@ export const useAuth = create()(
               };
               set({ user, isAuthenticated: true, isLoading: false });
             } else {
-              console.log('[authStore] No session - email confirmation required');
+              
               // Email confirmation required - user will receive email from Supabase
               set({ isLoading: false });
             }
           } else {
-            console.log('[authStore] No user returned from signUp');
+            
             set({ isLoading: false });
           }
         } catch (error) {
@@ -280,12 +280,12 @@ export const useAuth = create()(
       },
 
       logout: async () => {
-        console.log('[authStore] Logout started');
+        
         set({ isLoading: true });
         try {
           // Cleanup auth listener to prevent stacking
           if (authSubscription) {
-            console.log('[authStore] Unsubscribing auth listener');
+            
             authSubscription.unsubscribe();
             authSubscription = null;
           }
@@ -293,7 +293,7 @@ export const useAuth = create()(
           const { error } = await auth.signOut();
           if (error) throw error;
           
-          console.log('[authStore] Auth signout successful, clearing state');
+          
           set({ user: null, isAuthenticated: false, isLoading: false });
           useOrganization.getState().clearOrganizations();
           
@@ -304,7 +304,7 @@ export const useAuth = create()(
           // Clear persisted Zustand state
           clearZustandPersistedState();
 
-          console.log('[authStore] Logout complete, redirecting with refresh...');
+          
           // Use replace to redirect to login and refresh
           window.location.href = '/login';
         } catch (error) {

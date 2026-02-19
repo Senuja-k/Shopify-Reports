@@ -16,7 +16,7 @@ export const useAuth = create()(
       isLoading: false,
 
       initializeAuth: async () => {
-        console.log("[authStore] initializeAuth started");
+        
         set({ isLoading: true });
 
         try {
@@ -40,7 +40,7 @@ export const useAuth = create()(
             return;
           }
 
-          console.log("[authStore] Got session:", session ? "exists" : "none");
+          
 
           if (session?.user) {
             try {
@@ -82,7 +82,7 @@ export const useAuth = create()(
 
           const { data: subscriptionData } = auth.onAuthStateChange(
             async (event, session) => {
-              console.log("[authStore] Auth state changed:", event);
+              
 
               if (event === "INITIAL_SESSION") return;
 

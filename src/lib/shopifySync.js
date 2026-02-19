@@ -6,6 +6,45 @@ import {
 import { supabase } from './supabase';
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+const UPSERT_BATCH_SIZE = 25;
+const DELETE_BATCH_SIZE = 200;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientNetworkError(error) {
+  const msg =
+    (error && typeof error === 'object' && 'message' in error && String(error.message)) ||
+    '';
+  const details =
+    (error && typeof error === 'object' && 'details' in error && String(error.details)) ||
+    '';
+  const combined = `${msg} ${details}`.toLowerCase();
+  return (
+    combined.includes('failed to fetch') ||
+    combined.includes('err_http2_protocol_error') ||
+    combined.includes('connection_closed') ||
+    combined.includes('network')
+  );
+}
+
+async function withRetries(task, label, maxRetries = 3) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await task();
+    } catch (error) {
+      attempt += 1;
+      if (attempt > maxRetries || !isTransientNetworkError(error)) {
+        throw error;
+      }
+      const delayMs = 400 * attempt;
+      console.warn(`[${label}] transient failure, retrying in ${delayMs}ms (attempt ${attempt}/${maxRetries})`);
+      await sleep(delayMs);
+    }
+  }
+}
 
 /**
  * Get the latest sync time for an organization from the DB.
@@ -33,7 +72,7 @@ export async function getOrgLastSyncTime(organizationId, storeIds) {
     }
 
     const lastSync = data?.last_synced_at || null;
-    console.log(`[getOrgLastSyncTime] Latest sync for org ${organizationId}: ${lastSync}`);
+    
     return lastSync;
   } catch (err) {
     console.error('[getOrgLastSyncTime] Error:', err);
@@ -48,7 +87,7 @@ export async function getOrgLastSyncTime(organizationId, storeIds) {
  */
 export function isOrgSyncDue(lastSyncedAt) {
   if (!lastSyncedAt) {
-    console.log('[isOrgSyncDue] No last sync time - skipping auto-sync (use refresh button for first sync)');
+    
     return false;
   }
   const last = new Date(lastSyncedAt).getTime();
@@ -59,8 +98,8 @@ export function isOrgSyncDue(lastSyncedAt) {
   const minutesSince = Math.floor(timeSince / 1000 / 60);
   const minutesUntilDue = Math.max(0, Math.floor((TWO_HOURS_MS - timeSince) / 1000 / 60));
 
-  console.log(`[isOrgSyncDue] Last sync: ${lastSyncedAt} (${minutesSince} minutes ago)`);
-  console.log(`[isOrgSyncDue] Sync ${isDue ? 'IS' : 'NOT'} due ${isDue ? '' : `(${minutesUntilDue} minutes remaining)`}`);
+  
+  
 
   return isDue;
 }
@@ -76,27 +115,27 @@ export async function syncStoreProductsFull(
 ) {
   const syncTimestamp = new Date().toISOString();
   
-  console.log(`%c[syncStoreProductsFull] ======= Starting full sync =======`, 'color: blue; font-weight: bold');
-  console.log(`[syncStoreProductsFull] Store: ${store.name} (${store.id})`);
-  console.log(`[syncStoreProductsFull] Organization: ${organizationId || 'none'}`);
-  console.log(`[syncStoreProductsFull] User: ${userId}`);
-  console.log(`[syncStoreProductsFull] Timestamp: ${syncTimestamp}`);
+  
+  
+  
+  
+  
 
   try {
     // Fetch all products from Shopify
-    console.log(`[syncStoreProductsFull] Fetching products from Shopify API...`);
+    
     const allFetchedProducts = await fetchProductsFromStore({
       ...store,
       organizationId,
     });
-    console.log(`%c[syncStoreProductsFull] ? Fetched ${allFetchedProducts.length} product variants from Shopify`, 'color: green; font-weight: bold');    console.log(`%c[syncStoreProductsFull] ?? Store: ${store.name}, Variants fetched: ${allFetchedProducts.length}`, 'background: green; color: white; font-weight: bold; font-size: 14px');    
+    
     // Log all unique SKUs for debugging
     const allSkus = allFetchedProducts
       .map(p => p.sku || p.variantSku)
       .filter(Boolean);
-    console.log(`[syncStoreProductsFull] All SKUs found (${allSkus.length}):`, allSkus.slice(0, 50));
+    
     if (allSkus.length > 50) {
-      console.log(`[syncStoreProductsFull] ... and ${allSkus.length - 50} more SKUs`);
+      
     }
     
     // Log products with 'test' in SKU for debugging
@@ -105,13 +144,9 @@ export async function syncStoreProductsFull(
       p.variantSku?.toLowerCase().includes('test')
     );
     if (testSkuProducts.length > 0) {
-      console.log(`%c[syncStoreProductsFull] Products with 'test' in SKU:`, 'color: orange', testSkuProducts.map(p => ({
-        title: p.title,
-        sku: p.sku || p.variantSku,
-        variantId: p.variantId
-      })));
+      
     } else {
-      console.log(`%c[syncStoreProductsFull] No products found with 'test' in SKU`, 'color: orange');
+      
     }
 
     // For the old schema, we store each variant row with JSONB data
@@ -125,22 +160,26 @@ export async function syncStoreProductsFull(
       updated_at: new Date().toISOString(),
     }));
     
-    console.log(`[syncStoreProductsFull] Prepared ${productsToUpsert.length} records to upsert`);
-    console.log(`%c[syncStoreProductsFull] ?? DATABASE: Upserting ${productsToUpsert.length} variant rows`, 'background: blue; color: white; font-weight: bold; font-size: 14px');
+    
+    
 
-    // Batch upsert (100 at a time to avoid payload limits)
-    const BATCH_SIZE = 100;
+    // Smaller batches + retry for unstable network/protocol responses
+    const BATCH_SIZE = UPSERT_BATCH_SIZE;
     let totalUpserted = 0;
     for (let i = 0; i < productsToUpsert.length; i += BATCH_SIZE) {
       const batch = productsToUpsert.slice(i, i + BATCH_SIZE);
       const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
       const totalBatches = Math.ceil(productsToUpsert.length / BATCH_SIZE);
       
-      console.log(`[syncStoreProductsFull] Upserting batch ${batchNumber}/${totalBatches} (${batch.length} records)`);
       
-      const { data, error, count } = await supabase
-        .from('shopify_products')
-        .upsert(batch, { onConflict: 'store_id,shopify_variant_id', count: 'exact' });
+      
+      const { error } = await withRetries(
+        async () =>
+          supabase
+            .from('shopify_products')
+            .upsert(batch, { onConflict: 'store_id,shopify_variant_id', count: 'exact' }),
+        `syncStoreProductsFull:upsert-batch-${batchNumber}`,
+      );
       
       if (error) {
         console.error(`[syncStoreProductsFull] Error in batch ${batchNumber}:`, error);
@@ -149,26 +188,53 @@ export async function syncStoreProductsFull(
       }
       
       totalUpserted += batch.length;
-      console.log(`[syncStoreProductsFull] ? Batch ${batchNumber} complete. Total upserted so far: ${totalUpserted}/${productsToUpsert.length}`);
+      
     }
     
-    console.log(`[syncStoreProductsFull] ? All batches complete. Total records upserted: ${totalUpserted}`);    console.log(`%c[syncStoreProductsFull] ? DATABASE UPSERT COMPLETE: ${totalUpserted} rows saved`, 'background: green; color: white; font-weight: bold; font-size: 14px');
-    // Delete products that weren't in this sync (by variant ID, not just timestamp)
-    const variantIds = allFetchedProducts.map(p => p.variantId);
-    let deleteQuery = supabase
+    
+    // Delete products that weren't in this sync:
+    // Avoid huge `not.in(...)` URL by doing chunked ID deletes.
+    const incomingVariantIds = new Set(
+      allFetchedProducts.map((p) => String(p.variantId || p.id)).filter(Boolean),
+    );
+
+    let existingQuery = supabase
       .from('shopify_products')
-      .delete()
+      .select('id, shopify_variant_id')
       .eq('user_id', userId)
-      .eq('store_id', store.id)
-      .not('shopify_variant_id', 'in', `(${variantIds.map(id => `'${id}'`).join(',')})`);
-    if (organizationId) {
-      deleteQuery = deleteQuery.eq('organization_id', organizationId);
-    }
-    const { error: deleteError, count: deleteCount } = await deleteQuery;
-    if (deleteError) {
-      console.error(`[syncStoreProductsFull] Error deleting old products:`, deleteError);
+      .eq('store_id', store.id);
+    if (organizationId) existingQuery = existingQuery.eq('organization_id', organizationId);
+
+    const { data: existingRows, error: existingError } = await withRetries(
+      async () => existingQuery,
+      'syncStoreProductsFull:fetch-existing-for-delete',
+    );
+    if (existingError) {
+      console.error(`[syncStoreProductsFull] Error loading existing rows for cleanup:`, existingError);
     } else {
-      console.log(`[syncStoreProductsFull] ? Deleted ${deleteCount || 0} old products not in Shopify`);
+      const staleIds = (existingRows || [])
+        .filter((row) => !incomingVariantIds.has(String(row.shopify_variant_id)))
+        .map((row) => row.id);
+
+      let totalDeleted = 0;
+      for (let i = 0; i < staleIds.length; i += DELETE_BATCH_SIZE) {
+        const idBatch = staleIds.slice(i, i + DELETE_BATCH_SIZE);
+        const { error: delErr } = await withRetries(
+          async () =>
+            supabase
+              .from('shopify_products')
+              .delete()
+              .in('id', idBatch),
+          `syncStoreProductsFull:delete-batch-${Math.floor(i / DELETE_BATCH_SIZE) + 1}`,
+        );
+        if (delErr) {
+          console.error(`[syncStoreProductsFull] Error deleting stale batch:`, delErr);
+          break;
+        }
+        totalDeleted += idBatch.length;
+      }
+
+      
     }
 
     // Verify what was actually saved to database
@@ -177,12 +243,12 @@ export async function syncStoreProductsFull(
       .select('id', { count: 'exact', head: true })
       .eq('store_id', store.id);
     
-    console.log(`[syncStoreProductsFull] Database verification: ${dbCount} total records for this store`);
-    console.log(`%c[syncStoreProductsFull] ?? VERIFICATION: ${dbCount} rows in database for store`, 'background: orange; color: white; font-weight: bold; font-size: 14px');
+    
+    
     if (dbCount !== productsToUpsert.length) {
       console.warn(`%c[syncStoreProductsFull] ?? MISMATCH Tried to upsert ${productsToUpsert.length} but database has ${dbCount}`, 'background: red; color: white; font-weight: bold; font-size: 16px');
     } else {
-      console.log(`%c[syncStoreProductsFull] ? MATCH: Upserted ${productsToUpsert.length} = Database ${dbCount}`, 'background: green; color: white; font-weight: bold; font-size: 14px');
+      
     }
 
     // Update sync status
@@ -191,10 +257,10 @@ export async function syncStoreProductsFull(
     }, organizationId);
 
     const next = new Date(new Date(syncTimestamp).getTime() + TWO_HOURS_MS);
-    console.log(`[syncStoreProductsFull] ? Full sync complete`);
-    console.log(`[syncStoreProductsFull] Synced at: ${syncTimestamp}`);
-    console.log(`[syncStoreProductsFull] Next sync due: ${next.toISOString()}`);
-    console.log(`[syncStoreProductsFull] ==============================`);
+    
+    
+    
+    
   } catch (error) {
     console.error(`[syncStoreProductsFull] Error:`, error);
     await updateSyncStatus(userId, store.id, {
@@ -212,29 +278,27 @@ export async function syncStoresProductsFull(
   stores,
   organizationId
 ) {
-  console.log(`%c[syncStoresProductsFull] ======= Starting multi-store sync =======`, 'color: blue; font-weight: bold; font-size: 16px');
-  console.log(`%c[syncStoresProductsFull] Syncing ${stores.length} stores for organization`, 'color: blue; font-weight: bold');
-  console.log(`[syncStoresProductsFull] Stores: ${stores.map(s => s.name).join(', ')}`);
-
-  const results = await Promise.allSettled(
-    stores.map((store) => syncStoreProductsFull(userId, store, organizationId))
-  );
+  
+  
+  
 
   let successCount = 0;
   let failCount = 0;
-  results.forEach((result, index) => {
-    if (result.status === 'rejected') {
-      failCount++;
-      console.error(`[syncStoresProductsFull] ? Store ${stores[index].name} failed:`, result.reason);
-    } else {
+  for (const store of stores) {
+    try {
+      await syncStoreProductsFull(userId, store, organizationId);
       successCount++;
-      console.log(`[syncStoresProductsFull] ? Store ${stores[index].name} completed successfully`);
+      
+      await sleep(250);
+    } catch (error) {
+      failCount++;
+      console.error(`[syncStoresProductsFull] ? Store ${store.name} failed:`, error);
     }
-  });
+  }
 
-  console.log(`%c[syncStoresProductsFull] ? MULTI-STORE SYNC COMPLETE`, 'background: green; color: white; font-weight: bold; font-size: 16px');
-  console.log(`%c[syncStoresProductsFull] ?? Summary: ${successCount} succeeded, ${failCount} failed out of ${stores.length} stores`, 'background: blue; color: white; font-weight: bold; font-size: 14px');
-  console.log(`%c[syncStoresProductsFull] ======= End multi-store sync =======`, 'color: blue; font-weight: bold; font-size: 16px');
+  
+  
+  
 }
 
 /**
@@ -242,7 +306,7 @@ export async function syncStoresProductsFull(
  */
 export function isSyncDue(lastSyncedAt) {
   if (!lastSyncedAt) {
-    console.log('[isSyncDue] No last sync time - skipping auto-sync (use refresh button for first sync)');
+    
     return false;
   }
   const last = new Date(lastSyncedAt).getTime();
@@ -253,8 +317,8 @@ export function isSyncDue(lastSyncedAt) {
   const minutesSince = Math.floor(timeSince / 1000 / 60);
   const minutesUntilDue = Math.floor((TWO_HOURS_MS - timeSince) / 1000 / 60);
   
-  console.log(`[isSyncDue] Last sync: ${lastSyncedAt} (${minutesSince} minutes ago)`);
-  console.log(`[isSyncDue] Sync ${isDue ? 'IS' : 'NOT'} due ${isDue ? '' : `(${minutesUntilDue} minutes remaining)`}`);
+  
+  
   
   return isDue;
 }

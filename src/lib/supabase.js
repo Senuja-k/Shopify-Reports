@@ -14,7 +14,7 @@ let supabasePublicInstance = null;
 
 function getSupabaseClient() {
   if (!supabaseInstance) {
-    console.log("[Supabase] Creating singleton client instance");
+    
     supabaseInstance = createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
         persistSession: true,
@@ -35,7 +35,7 @@ function getSupabaseClient() {
 
 function getSupabasePublicClient() {
   if (!supabasePublicInstance) {
-    console.log("[Supabase] Creating singleton public client instance");
+    
     supabasePublicInstance = createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
         persistSession: false,
@@ -102,17 +102,40 @@ export async function withTimeout(promise, timeoutMs, operationName) {
  * If timeout occurs, returns null and logs warning.
  */
 export async function getSessionWithTimeout(timeoutMs = AUTH_TIMEOUT_MS) {
-  console.log("[getSessionWithTimeout] Starting session fetch...");
+  // ✅ 1) Local fast path: read from storage first
+  try {
+    const raw = localStorage.getItem("supabase.auth.token");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // supabase-js stores shape like: { currentSession: {...} } OR { access_token: ... }
+      const localSession = parsed?.currentSession || parsed;
+      if (localSession?.access_token) {
+        // If it has expiry and still valid, return it immediately
+        if (localSession.expires_at) {
+          const now = Math.floor(Date.now() / 1000);
+          if (localSession.expires_at - now > 30) {
+            // ✅ valid for at least 30s
+            return localSession;
+          }
+        } else {
+          // No expiry info, still allow it
+          return localSession;
+        }
+      }
+    }
+  } catch (e) {
+    // ignore storage parse errors
+  }
+
+  // ✅ 2) Fallback: supabase auth.getSession (can be slow in background tabs)
+  
   try {
     const result = await withTimeout(
       auth.getSession(),
       timeoutMs,
       "getSession",
     );
-    console.log(
-      "[getSessionWithTimeout] Session fetch complete:",
-      result.data.session ? "has session" : "no session",
-    );
+    
     return result.data.session;
   } catch (error) {
     if (error instanceof AuthTimeoutError) {
@@ -120,7 +143,7 @@ export async function getSessionWithTimeout(timeoutMs = AUTH_TIMEOUT_MS) {
       return null;
     }
     console.error("[getSessionWithTimeout] Error:", error);
-    return null; // ✅ do not throw here; prevents UI cascade
+    return null;
   }
 }
 
@@ -129,13 +152,10 @@ export async function getSessionWithTimeout(timeoutMs = AUTH_TIMEOUT_MS) {
  * If timeout occurs, returns null.
  */
 export async function getUserWithTimeout(timeoutMs = AUTH_TIMEOUT_MS) {
-  console.log("[getUserWithTimeout] Starting user fetch...");
+  
   try {
     const result = await withTimeout(auth.getUser(), timeoutMs, "getUser");
-    console.log(
-      "[getUserWithTimeout] User fetch complete:",
-      result.data.user ? "has user" : "no user",
-    );
+    
     return result.data.user;
   } catch (error) {
     if (error instanceof AuthTimeoutError) {
@@ -152,7 +172,7 @@ export async function getUserWithTimeout(timeoutMs = AUTH_TIMEOUT_MS) {
  * Returns true if session was refreshed successfully, false otherwise.
  */
 export async function refreshSessionSilently(timeoutMs = AUTH_TIMEOUT_MS) {
-  console.log("[refreshSessionSilently] Attempting silent session refresh...");
+  
   try {
     const { data, error } = await withTimeout(
       auth.refreshSession(),
@@ -166,11 +186,11 @@ export async function refreshSessionSilently(timeoutMs = AUTH_TIMEOUT_MS) {
     }
 
     if (data.session) {
-      console.log("[refreshSessionSilently] Session refreshed successfully");
+      
       return true;
     }
 
-    console.log("[refreshSessionSilently] No session after refresh");
+    
     return false;
   } catch (e) {
     if (e instanceof AuthTimeoutError) {
@@ -187,7 +207,7 @@ export async function refreshSessionSilently(timeoutMs = AUTH_TIMEOUT_MS) {
  * Use this when the session is definitely invalid.
  */
 export function clearStaleSession() {
-  console.log("[clearStaleSession] Clearing stale session data...");
+  
   try {
     localStorage.removeItem("shopify-report-auth");
   } catch (e) {
@@ -227,7 +247,7 @@ export async function ensureValidSession(
   }
 
   inFlightSessionPromise = (async () => {
-    console.log("[ensureValidSession] Checking session validity...");
+    
     try {
       let session = await getSessionWithTimeout(timeoutMs);
 
@@ -236,13 +256,18 @@ export async function ensureValidSession(
         console.warn(
           "[ensureValidSession] No session from initial check. Attempting silent refresh...",
         );
-        const refreshed = await refreshSessionSilently(
-          Math.min(timeoutMs, AUTH_TIMEOUT_MS),
-        );
+        const refreshed = await refreshSessionSilently(15_000);
+
         if (refreshed) {
-          session = await getSessionWithTimeout(
-            Math.min(timeoutMs, AUTH_TIMEOUT_MS),
+          session = await getSessionWithTimeout(AUTH_TIMEOUT_MS);
+        } else {
+          // ✅ IMPORTANT: if refresh failed/timed out, DO NOT hard-fail.
+          // Let queries proceed — client may still have a valid token.
+          console.warn(
+            "[ensureValidSession] Refresh failed/timed out, proceeding without blocking.",
           );
+          lastSessionCheckAt = Date.now(); // avoid spamming refresh
+          return null;
         }
       }
 
@@ -258,9 +283,7 @@ export async function ensureValidSession(
         const nowSec = Math.floor(Date.now() / 1000);
         const timeUntilExpiry = expiresAt - nowSec;
         if (timeUntilExpiry < 60) {
-          console.log(
-            "[ensureValidSession] Token expiring soon, attempting refresh...",
-          );
+          
           const ok = await refreshSessionSilently(
             Math.min(timeoutMs, AUTH_TIMEOUT_MS),
           );
@@ -273,7 +296,7 @@ export async function ensureValidSession(
       }
 
       lastSessionCheckAt = Date.now();
-      console.log("[ensureValidSession] Session ok (cached for TTL)");
+      
       return session;
     } catch (e) {
       console.error("[ensureValidSession] Unexpected error:", e);
@@ -290,35 +313,25 @@ export async function ensureValidSession(
 // INITIALIZATION HELPER WITH TIMEOUT
 // ==========================================
 export async function initializeAuthWithTimeout(timeoutMs = AUTH_TIMEOUT_MS) {
-  console.log(
-    "[initializeAuthWithTimeout] Starting auth initialization with timeout:",
-    timeoutMs,
-    "ms",
-  );
+  
   let session = null;
   let timedOut = false;
   try {
     session = await withTimeout(
       (async () => {
-        console.log("[initializeAuthWithTimeout] Calling auth.getSession()...");
+        
         const { data, error } = await auth.getSession();
         if (error) {
           console.warn("[initializeAuthWithTimeout] Session error:", error);
           throw error;
         }
-        console.log(
-          "[initializeAuthWithTimeout] Got session result:",
-          data.session ? "exists" : "none",
-        );
+        
         return data.session;
       })(),
       timeoutMs,
       "initializeAuth",
     );
-    console.log(
-      "[initializeAuthWithTimeout] Complete:",
-      session ? "has session" : "no session",
-    );
+    
     return { session, timedOut: false };
   } catch (error) {
     if (error instanceof AuthTimeoutError) {
@@ -337,7 +350,7 @@ export async function initializeAuthWithTimeout(timeoutMs = AUTH_TIMEOUT_MS) {
 // SUPABASE CALL WRAPPER WITH LOGGING
 // ==========================================
 export async function loggedSupabaseCall(operationName, queryFn, timeoutMs) {
-  console.log(`[Supabase:${operationName}] Starting...`);
+  
   const startTime = Date.now();
 
   try {
@@ -349,7 +362,7 @@ export async function loggedSupabaseCall(operationName, queryFn, timeoutMs) {
     }
 
     const duration = Date.now() - startTime;
-    console.log(`[Supabase:${operationName}] Complete in ${duration}ms`);
+    
     return result;
   } catch (error) {
     const duration = Date.now() - startTime;

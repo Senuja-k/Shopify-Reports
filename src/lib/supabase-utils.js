@@ -4,7 +4,7 @@ import { supabase, ensureValidSession } from './supabase';
 
 export async function saveStore(userId, organizationId, store) {
   try {
-    console.log('[saveStore] Saving store:', store.name, 'for org:', organizationId);
+    
     
     // Use authenticated supabase client for write operations (required for RLS)
     // Only save fields that exist in the database
@@ -28,7 +28,7 @@ export async function saveStore(userId, organizationId, store) {
       throw error;
     }
     
-    console.log('[saveStore] Store saved successfully');
+    
   } catch (error) {
     console.error('[saveStore] Error saving store:', error);
     throw error;
@@ -37,7 +37,7 @@ export async function saveStore(userId, organizationId, store) {
 
 export async function getStores(userId, organizationId) {
   try {
-    console.log('[getStores] Fetching stores for org:', organizationId);
+    
     
     // Add timeout to prevent hanging. Use AUTH_TIMEOUT_MS so it's aligned
     // with other auth operations (user requested longer validation window).
@@ -63,14 +63,14 @@ export async function getStores(userId, organizationId) {
                      errorMsg.includes('signal is aborted') ||
                      error.name === 'AbortError';
       if (isAbort) {
-        console.log('[getStores] Query was aborted, returning empty array');
+        
         return [];
       }
       
       console.error('[getStores] Query error:', error);
       // If it's an auth error, try to refresh the session
       if (error.message?.includes('JWT') || error.code === 'PGRST301') {
-        console.log('[getStores] Auth error detected, session may have expired');
+        
         const session = await ensureValidSession(3000);
         if (!session) {
           console.error('[getStores] Could not refresh session');
@@ -100,7 +100,7 @@ export async function getStores(userId, organizationId) {
       throw error;
     }
     
-    console.log('[getStores] Got', data?.length || 0, 'stores');
+    
     
     return (data || []).map((store) => ({
       id: store.id,
@@ -115,7 +115,7 @@ export async function getStores(userId, organizationId) {
     // Don't log AbortErrors - they happen during rapid re-renders
     const errorMessage = (error)?.message || String(error);
     if (errorMessage.includes('abort') || errorMessage.includes('AbortError')) {
-      console.log('[getStores] Request aborted, returning empty array');
+      
       return [];
     }
     console.error('[getStores] Error:', error);
@@ -140,7 +140,7 @@ export async function updateStoreInSupabase(userId, organizationId, storeId, upd
 
 export async function deleteStoreFromSupabase(userId, organizationId, storeId) {
   try {
-    console.log(`[deleteStoreFromSupabase] Deleting store ${storeId} for user ${userId}`);
+    
     
     // First, get counts of what will be deleted
     const { data: productData } = await supabase
@@ -150,7 +150,7 @@ export async function deleteStoreFromSupabase(userId, organizationId, storeId) {
     
     const productCount = productData?.length || 0;
     
-    console.log(`[deleteStoreFromSupabase] Will delete: ${productCount} products`);
+    
     
     // Delete the store (CASCADE will delete all related data)
     const { error } = await supabase
@@ -164,7 +164,7 @@ export async function deleteStoreFromSupabase(userId, organizationId, storeId) {
       throw error;
     }
     
-    console.log(`[deleteStoreFromSupabase] Store deleted successfully. Cascade deleted ${productCount} products`);
+    
   } catch (error) {
     console.error('[deleteStoreFromSupabase] Error deleting store:', error);
     throw error;
@@ -236,24 +236,24 @@ export async function getReports(userId, organizationId) {
 }
 
 export async function getReportByShareLink(shareLink) {
-  console.log('[getReportByShareLink] Fetching report with shareLink:', shareLink);
+  
   try {
-    console.log('[getReportByShareLink] Calling Supabase...');
+    
     const { data, error } = await supabase
       .from('reports')
       .select('*')
       .eq('share_link', shareLink)
       .single();
 
-    console.log('[getReportByShareLink] Supabase call complete');
+    
     if (error && error.code !== 'PGRST116') throw error; // PGRST116 = no rows returned
     
     if (!data) {
-      console.log('[getReportByShareLink] No report found');
+      
       return null;
     }
     
-    console.log('[getReportByShareLink] Report found:', data.id);
+    
     // Map snake_case back to camelCase
     return {
       ...data,
@@ -274,7 +274,7 @@ export async function getReportByShareLink(shareLink) {
 
 export async function deleteReportFromSupabase(userId, organizationId, reportId) {
   try {
-    console.log('[deleteReportFromSupabase] Deleting report:', reportId, 'org:', organizationId);
+    
     const { data, error } = await supabase
       .from('reports')
       .delete()
@@ -287,7 +287,7 @@ export async function deleteReportFromSupabase(userId, organizationId, reportId)
       throw error;
     }
     
-    console.log('[deleteReportFromSupabase] Delete result:', data);
+    
     if (!data || data.length === 0) {
       console.warn('[deleteReportFromSupabase] No rows deleted - report may not exist or RLS policy blocked');
     }
@@ -352,15 +352,15 @@ export async function getColumnPreferences(userId) {
 // ============= ORGANIZATIONS =============
 
 export async function getOrganizationsForUser(userId) {
-  console.log('[getOrganizationsForUser] Starting fetch for user:', userId);
+  
   try {
-    console.log('[getOrganizationsForUser] Calling Supabase...');
+    
     const { data, error } = await supabase
       .from('organization_members')
       .select('role, organization:organizations(id, name, created_at)')
       .eq('user_id', userId);
 
-    console.log('[getOrganizationsForUser] Supabase call complete');
+    
     if (error) throw error;
 
     const orgs = (data || [])
@@ -375,7 +375,7 @@ export async function getOrganizationsForUser(userId) {
       })
       .filter(Boolean);
     
-    console.log('[getOrganizationsForUser] Returning', orgs.length, 'organizations');
+    
     return orgs;
   } catch (error) {
     console.error('[getOrganizationsForUser] Error loading organizations:', error);
@@ -458,7 +458,7 @@ export async function deleteOrganization(userId, organizationId) {
     throw error;
   }
 
-  console.log('[deleteOrganization] Organization deleted successfully:', organizationId);
+  
 }
 
 export async function getOrganizationMembers(organizationId) {

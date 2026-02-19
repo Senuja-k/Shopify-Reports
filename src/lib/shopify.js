@@ -136,15 +136,15 @@ async function getAdminTokenForStore(domain, organizationId) {
   try {
     const user = await supabase.auth.getUser();
     if (!user.data.user) {
-      console.log('[getAdminTokenForStore] No user authenticated');
+      
       return null;
     }
 
-    console.log('[getAdminTokenForStore] Looking for token for domain:', domain, 'user:', user.data.user.id);
+    
 
     // Normalize domain - remove www, remove protocol, remove trailing slash
     let normalizedDomain = domain.toLowerCase().replace(/^https:\/\//, '').replace(/www\./, '').replace(/\/$/, '');
-    console.log('[getAdminTokenForStore] Normalized domain:', normalizedDomain);
+    
 
     // First try exact match
     let query = supabase
@@ -161,11 +161,11 @@ async function getAdminTokenForStore(domain, organizationId) {
 
     if (error && error.code === 'PGRST116') {
       // No rows found - try with .myshopify.com suffix if not present
-      console.log('[getAdminTokenForStore] No exact match found, trying variations...');
+      
       
       if (!normalizedDomain.includes('.myshopify.com')) {
         const shopifyDomain = `${normalizedDomain}.myshopify.com`;
-        console.log('[getAdminTokenForStore] Trying with .myshopify.com suffix:', shopifyDomain);
+        
         
         let resultQuery = supabase
           .from('stores')
@@ -185,16 +185,16 @@ async function getAdminTokenForStore(domain, organizationId) {
     }
 
     if (error) {
-      console.log('[getAdminTokenForStore] Query error:', error);
+      
       return null;
     }
     
     if (!data) {
-      console.log('[getAdminTokenForStore] No record found');
+      
       return null;
     }
     
-    console.log('[getAdminTokenForStore] Found admin token for', data.domain);
+    
     return data.admin_token;
   } catch (error) {
     console.error('[getAdminTokenForStore] Failed to get Admin token:', error);
@@ -233,7 +233,7 @@ async function storefrontApiRequest(
         // Check if it's a rate limit error
         if (errorMessage.includes('Throttled') && attempt < retries - 1) {
           const delay = Math.pow(2, attempt) * 1000;
-          console.log(`Rate limited. Retrying in ${delay}ms... (attempt ${attempt + 1}/${retries})`);
+          
           await new Promise(resolve => setTimeout(resolve, delay));
           continue;
         }
@@ -248,7 +248,7 @@ async function storefrontApiRequest(
       }
       
       const delay = Math.pow(2, attempt) * 1000;
-      console.log(`Request failed. Retrying in ${delay}ms... (attempt ${attempt + 1}/${retries})`);
+      
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
@@ -295,7 +295,7 @@ async function adminApiRequest(
         if (errorMessage.includes('Throttled') && attempt < retries - 1) {
           // Exponential backoff: 1s, 2s, 4s, etc.
           const delay = Math.pow(2, attempt) * 1000;
-          console.log(`Rate limited. Retrying in ${delay}ms... (attempt ${attempt + 1}/${retries})`);
+          
           await new Promise(resolve => setTimeout(resolve, delay));
           continue;
         }
@@ -311,7 +311,7 @@ async function adminApiRequest(
       
       // For network errors, also retry with backoff
       const delay = Math.pow(2, attempt) * 1000;
-      console.log(`Request failed. Retrying in ${delay}ms... (attempt ${attempt + 1}/${retries})`);
+      
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
@@ -324,7 +324,7 @@ export async function fetchProductsFromStore(storeConfig) {
   let hasNextPage = true;
   let cursor = null;
   
-  console.log('[fetchProductsFromStore] Starting fetch for store:', storeConfig.name, 'domain:', storeConfig.domain);
+  
   
   // Add a small delay to avoid overwhelming the API
   await new Promise(resolve => setTimeout(resolve, 500));
@@ -332,13 +332,13 @@ export async function fetchProductsFromStore(storeConfig) {
   // Try to get Admin token from shopify_stores table first
   let adminToken = storeConfig.adminToken;
   if (!adminToken) {
-    console.log('[fetchProductsFromStore] No admin token in config, fetching from shopify_stores...');
+    
     adminToken = await getAdminTokenForStore(storeConfig.domain, storeConfig.organizationId);
   }
   
   // Use Admin API if available, otherwise fall back to Storefront API
   const useAdminApi = !!adminToken;
-  console.log('[fetchProductsFromStore] Using', useAdminApi ? 'Admin API' : 'Storefront API', 'for', storeConfig.name);
+  
   
   const query = useAdminApi ? ADMIN_PRODUCTS_QUERY : PRODUCTS_QUERY;
   const apiRequest = useAdminApi ? adminApiRequest : storefrontApiRequest;
@@ -354,11 +354,11 @@ export async function fetchProductsFromStore(storeConfig) {
     const variables = { first: 250 };
     if (cursor) variables.after = cursor;
 
-    console.log(`%c[fetchProductsFromStore] Fetching batch (cursor: ${cursor ? 'yes' : 'initial'}), total so far: ${allProducts.length}`, 'color: cyan');
+    
     const data = await apiRequest(configWithToken, query, variables);
     const products = data.data.products;
     
-    console.log(`%c[fetchProductsFromStore] Received ${products.edges.length} products, hasNextPage: ${products.pageInfo.hasNextPage}, total accumulated: ${allProducts.length + products.edges.length}`, 'color: cyan');
+    
 
     for (const edge of products.edges) {
       const product = edge.node;
@@ -373,7 +373,7 @@ export async function fetchProductsFromStore(storeConfig) {
       // Log variants with their SKUs for debugging
       const skus = variantsArray.map((v) => v.sku).filter(Boolean);
       if (skus.length > 0) {
-        console.log(`[fetchProductsFromStore] Product "${product.title}" SKUs: ${skus.join(', ')}`);
+        
       }
       
       // Log if product has many variants or might be truncated
@@ -381,7 +381,7 @@ export async function fetchProductsFromStore(storeConfig) {
         console.warn(`[fetchProductsFromStore] ?? Product "${product.title}" has ${variantsArray.length} variants (may be truncated at API limit)`);
       }
       
-      console.log(`[fetchProductsFromStore] Product ${product.title}: ${variantsArray.length} variants, status: ${product.status}`);
+      
 
       // Use the product data as-is from Admin API (it has all the fields we need)
       const normalizedProduct = {
@@ -419,11 +419,11 @@ export async function fetchProductsFromStore(storeConfig) {
 
   // Flatten products with variants - one row per variant
   const flattenedProducts = flattenProductsWithVariants(allProducts);
-  console.log(`%c[fetchProductsFromStore] ?? COMPLETE: Fetched ${allProducts.length} products from Shopify API`, 'background: purple; color: white; font-weight: bold; font-size: 14px');
-  console.log(`%c[fetchProductsFromStore] ?? Flattened into ${flattenedProducts.length} variant rows`, 'background: purple; color: white; font-weight: bold; font-size: 14px');
-  console.log(`[fetchProductsFromStore] Product titles fetched:`, allProducts.map(p => p.title).slice(0, 10));
+  
+  
+  
   if (allProducts.length > 10) {
-    console.log(`[fetchProductsFromStore] ... and ${allProducts.length - 10} more products`);
+    
   }
   
   return flattenedProducts;
@@ -447,7 +447,7 @@ export async function fetchAllProductsFromStores(
   });
 
   // Products are already flattened by fetchProductsFromStore, no need to flatten again
-  console.log(`[fetchAllProductsFromStores] Total products from all stores: ${allProducts.length}`);
+  
   
   return allProducts;
 }

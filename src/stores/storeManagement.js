@@ -19,29 +19,29 @@ export const useStoreManagement = create()(
 
         // Prevent concurrent calls
         if (get().isLoading && !force) {
-          console.log('[storeManagement] loadStores already in progress, skipping');
+          
           return;
         }
 
         // Only load if authenticated
         const isAuthenticated = useAuth.getState().isAuthenticated;
         if (!isAuthenticated) {
-          console.log('[storeManagement] Not authenticated, clearing stores');
+          
           set({ stores: [], isLoading: false, error: null });
           return;
         }
 
-        console.log('[storeManagement] loadStores started');
+        
         set({ isLoading: true, error: null });
 
         try {
           // Use persisted user from authStore instead of async getSession
           const user = useAuth.getState().user;
-          console.log('[storeManagement] Got user from authStore:', user?.id || 'none');
+          
 
           if (!user) {
             // ✅ Don’t wipe persisted stores (auth may still hydrate)
-            console.log('[storeManagement] No user yet, skipping store fetch');
+            
             return;
           }
 
@@ -50,13 +50,13 @@ export const useStoreManagement = create()(
 
           if (!organizationId) {
             // ✅ IMPORTANT: do NOT clear stores here (this caused “No stores connected”)
-            console.log('[storeManagement] No organization yet, skipping store fetch');
+            
             return;
           }
 
-          console.log('[storeManagement] Fetching stores for org:', organizationId);
+          
           const stores = await getStores(user.id, organizationId);
-          console.log('[storeManagement] Got', stores.length, 'stores');
+          
 
           const selectedStoreId = get().selectedStoreId;
           const hasSelected = selectedStoreId ? stores.some((s) => s.id === selectedStoreId) : false;
@@ -66,7 +66,7 @@ export const useStoreManagement = create()(
             selectedStoreId: hasSelected ? selectedStoreId : null,
           });
 
-          console.log('[storeManagement] loadStores complete');
+          
         } catch (error) {
           console.error('[storeManagement] Error loading stores:', error);
           set({ error: error?.message || 'Failed to load stores' });
@@ -76,7 +76,7 @@ export const useStoreManagement = create()(
       },
 
       addStore: async (store) => {
-        console.log('[storeManagement] addStore called:', store.name);
+        
         const user = useAuth.getState().user;
         if (!user) throw new Error('User not authenticated');
 
@@ -92,15 +92,15 @@ export const useStoreManagement = create()(
             createdAt: new Date().toISOString(),
           };
 
-          console.log('[storeManagement] Saving store to database...');
+          
           await saveStore(user.id, organizationId, newStore);
 
-          console.log('[storeManagement] Store saved, updating local state...');
+          
           set((state) => ({
             stores: [...state.stores, newStore],
           }));
 
-          console.log('[storeManagement] addStore complete');
+          
         } catch (error) {
           console.error('[storeManagement] Error adding store:', error);
           set({ error: error?.message || 'Failed to add store' });
@@ -159,7 +159,7 @@ export const useStoreManagement = create()(
       setViewMode: (mode) => set({ viewMode: mode }),
 
       clearStores: () => {
-        console.log('[storeManagement] Clearing all stores');
+        
         set({ stores: [], selectedStoreId: null, viewMode: 'combined', isLoading: false, error: null });
       },
     }),

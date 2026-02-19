@@ -16,11 +16,11 @@ export async function upsertProducts(
 ) {
   try {
     if (products.length === 0) {
-      console.log('[upsertProducts] No products to upsert');
+      
       return;
     }
 
-    console.log(`[upsertProducts] Upserting ${products.length} products`);
+    
 
     const records = products.map((product) => ({
       user_id: userId,
@@ -48,7 +48,7 @@ export async function upsertProducts(
       const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
       const batch = records.slice(i, i + BATCH_SIZE);
 
-      console.log(`[upsertProducts] Batch ${batchNumber}/${totalBatches} (${batch.length} records)`);
+      
 
       const { error } = await supabase
         .from('shopify_products')
@@ -60,7 +60,7 @@ export async function upsertProducts(
       }
     }
 
-    console.log(`[upsertProducts] Successfully upserted all ${records.length} products`);
+    
   } catch (error) {
     console.error('[upsertProducts] Error:', error);
     throw error;
@@ -78,11 +78,11 @@ export async function upsertVariants(
 ) {
   try {
     if (variants.length === 0) {
-      console.log('[upsertVariants] No variants to upsert');
+      
       return;
     }
 
-    console.log(`[upsertVariants] Upserting ${variants.length} variants`);
+    
 
     // First, fetch the product UUIDs we just inserted
     const productIds = await supabase
@@ -142,7 +142,7 @@ export async function upsertVariants(
       const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
       const batch = records.slice(i, i + BATCH_SIZE);
 
-      console.log(`[upsertVariants] Batch ${batchNumber}/${totalBatches} (${batch.length} records)`);
+      
 
       const { error } = await supabase
         .from('shopify_products')
@@ -154,7 +154,7 @@ export async function upsertVariants(
       }
     }
 
-    console.log(`[upsertVariants] Successfully upserted all ${records.length} variants`);
+    
   } catch (error) {
     console.error('[upsertVariants] Error:', error);
     throw error;
@@ -172,11 +172,11 @@ export async function upsertProductMetafields(
 ) {
   try {
     if (metafields.length === 0) {
-      console.log('[upsertProductMetafields] No metafields to upsert');
+      
       return;
     }
 
-    console.log(`[upsertProductMetafields] Upserting ${metafields.length} metafields`);
+    
 
     const records = metafields.map((mf) => ({
       user_id: userId,
@@ -204,7 +204,7 @@ export async function upsertProductMetafields(
       }
     }
 
-    console.log(`[upsertProductMetafields] Successfully upserted ${records.length} metafields`);
+    
   } catch (error) {
     console.error('[upsertProductMetafields] Error:', error);
     throw error;
@@ -297,9 +297,9 @@ export async function getSyncStatus(
   organizationId,
   signal
 ) {
-  console.log('[getSyncStatus] Fetching sync status for store:', storeId, 'org:', organizationId || 'none');
+  
   try {
-    console.log('[getSyncStatus] Building Supabase query...');
+    
     let query = supabase
       .from('shopify_store_sync_status')
       .select('*')
@@ -315,9 +315,9 @@ export async function getSyncStatus(
       query = query.eq('user_id', userId);
     }
 
-    console.log('[getSyncStatus] Executing Supabase query...');
+    
     const { data, error } = await query.maybeSingle();
-    console.log('[getSyncStatus] Supabase query complete');
+    
 
     if (error && error.code !== 'PGRST116') {
       const isAbort =
@@ -326,7 +326,7 @@ export async function getSyncStatus(
           (error).message.includes('signal is aborted'));
 
       if (isAbort) {
-        console.log('[getSyncStatus] Query was aborted');
+        
         // Expected cancellation (e.g., visibility change/unmount) � ignore
         return null;
       }
@@ -336,11 +336,11 @@ export async function getSyncStatus(
     }
 
     if (!data) {
-      console.log(`[getSyncStatus] No sync status found for store ${storeId}`);
+      
       return null;
     }
 
-    console.log(`[getSyncStatus] Found sync status for store ${storeId}, last synced:`, data.last_synced_at);
+    
 
     return {
       store_id: data.store_id,
@@ -390,7 +390,7 @@ export async function updateSyncStatus(
       throw error;
     }
 
-    console.log('[updateSyncStatus] Sync status updated');
+    
   } catch (error) {
     console.error('[updateSyncStatus] Error:', error);
     throw error;
@@ -405,7 +405,7 @@ export async function markDeletedProducts(
   organizationId
 ) {
   try {
-    console.log('[markDeletedProducts] Marking products not updated in this sync');
+    
 
     let query = supabase
       .from('shopify_products')
@@ -423,7 +423,7 @@ export async function markDeletedProducts(
       throw error;
     }
 
-    console.log('[markDeletedProducts] Successfully marked deleted products');
+    
   } catch (error) {
     console.error('[markDeletedProducts] Error:', error);
     throw error;
@@ -436,7 +436,7 @@ export async function markDeletedVariants(
   organizationId
 ) {
   try {
-    console.log('[markDeletedVariants] Marking variants not updated in this sync');
+    
 
     let query = supabase
       .from('shopify_products')
@@ -454,7 +454,7 @@ export async function markDeletedVariants(
       throw error;
     }
 
-    console.log('[markDeletedVariants] Successfully marked deleted variants');
+    
   } catch (error) {
     console.error('[markDeletedVariants] Error:', error);
     throw error;
@@ -534,7 +534,7 @@ export async function getVariantsByStore(
 
     if (error) throw error;
     
-    console.log(`[getVariantsByStore] Fetched ${data?.length || 0} products (total: ${count})`);
+    
     
     // The old schema stores the full product in the 'data' JSONB column
     // Extract it and add store_id
@@ -554,15 +554,9 @@ export async function getVariantsByStore(
       };
     });
     
-    console.log(`[getVariantsByStore] Retrieved ${products.length} products from database`);
+    
     if (products.length > 0) {
-      console.log('[getVariantsByStore] Sample product:', {
-        id: products[0].id,
-        title: products[0].title,
-        status: products[0].status,
-        price: products[0].price,
-        variantId: products[0].variantId,
-      });
+      
     }
     
     return products;
@@ -592,7 +586,7 @@ export async function getVariantsByStorePaginated(
     const from = pageIndex * pageSize;
     const to = from + pageSize - 1;
 
-    console.log(`[getVariantsByStorePaginated] Fetching page ${pageIndex} (rows ${from}-${to})`);
+    
 
     // Get total count first
     let countQuery = supabase
@@ -639,9 +633,7 @@ export async function getVariantsByStorePaginated(
 
     const pageCount = Math.ceil((totalCount || 0) / pageSize);
 
-    console.log(
-      `[getVariantsByStorePaginated] Fetched ${products.length} products (page ${pageIndex + 1}/${pageCount}, total: ${totalCount})`
-    );
+    
 
     return {
       data,
@@ -665,7 +657,7 @@ export async function getAllVariantsByStore(
   signal
 ) {
   try {
-    console.log('[getAllVariantsByStore] Fetching all products...');
+    
     
     // Ensure we have a valid session before making authenticated queries
     const session = await ensureValidSession();
@@ -698,10 +690,10 @@ export async function getAllVariantsByStore(
       throw countError;
     }
 
-    console.log(`[getAllVariantsByStore] Total count from database: ${count} (storeIds: ${storeIds.join(', ')}, organizationId: ${organizationId || 'none'}, userId: ${userId})`);
+    
 
     if (!count || count === 0) {
-      console.log('[getAllVariantsByStore] No products found');
+      
       return [];
     }
 
@@ -773,26 +765,26 @@ export async function getAllVariantsByStore(
         allProducts.push(...products);
       }
 
-      console.log(`[getAllVariantsByStore] Completed batches ${groupStart + 1}-${groupEnd} (${allProducts.length}/${count} products)`);
+      
     }
 
-    console.log(`[getAllVariantsByStore] Loaded ${allProducts.length} products for export`);
+    
     return allProducts;
   } catch (error) {
     // Don't log AbortErrors - they're expected when requests are cancelled
     if (error instanceof DOMException && error.name === 'AbortError') {
-      console.log('[getAllVariantsByStore] Request was cancelled (DOMException)');
+      
       return [];
     }
     // Check for error name property
     if (error && typeof error === 'object' && 'name' in error && error.name === 'AbortError') {
-      console.log('[getAllVariantsByStore] Request was cancelled (named AbortError)');
+      
       return [];
     }
     // Check for abort in error message
     if (error && typeof error === 'object' && 'message' in error && 
         typeof error.message === 'string' && (error.message.toLowerCase().includes('abort') || error.message.includes('cancelled'))) {
-      console.log('[getAllVariantsByStore] Request was cancelled (message check)');
+      
       return [];
     }
     console.error('[getAllVariantsByStore] Error:', error);

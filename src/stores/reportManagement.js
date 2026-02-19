@@ -90,7 +90,7 @@ export const useReportManagement = create()(
       },
 
       deleteReport: async (reportId) => {
-        console.log('[reportManagement] deleteReport called for:', reportId);
+        
         const session = await auth.getSession();
         const user = session.data.session?.user;
         if (!user) {
@@ -104,11 +104,11 @@ export const useReportManagement = create()(
           throw new Error('No active organization selected');
         }
         
-        console.log('[reportManagement] deleteReport: user:', user.id, 'org:', organizationId);
+        
         set({ isLoading: true });
         try {
           await deleteReportFromSupabase(user.id, organizationId, reportId);
-          console.log('[reportManagement] deleteReport: Supabase delete successful');
+          
           set((state) => ({
             reports: state.reports.filter((r) => r.id !== reportId),
             isLoading: false,

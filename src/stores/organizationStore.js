@@ -24,13 +24,13 @@ export const useOrganization = create()(
         const { force = false } = options;
 
         if (get().isLoading && !force) {
-          console.log('[organizationStore] loadOrganizations already in progress, skipping');
+          
           return;
         }
 
         const { isAuthenticated, user } = useAuth.getState();
         if (!isAuthenticated) {
-          console.log('[organizationStore] Not authenticated, clearing organizations');
+          
           set({ organizations: [], activeOrganizationId: null, members: [], isLoading: false, error: null });
           return;
         }
@@ -39,18 +39,18 @@ export const useOrganization = create()(
 
         try {
           if (!user) {
-            console.log('[organizationStore] No user yet, skipping org fetch');
+            
             return;
           }
 
           let organizations = await getOrganizationsForUser(user.id);
 
           if (organizations.length === 0) {
-            console.log('[loadOrganizations] No organizations found, creating default organization...');
+            
             try {
               const defaultOrg = await createOrganizationForUser(user.id, 'My Organization');
               organizations = [defaultOrg];
-              console.log('[loadOrganizations] Default organization created:', defaultOrg.id);
+              
             } catch (createError) {
               console.error('[loadOrganizations] Failed to create default organization:', createError);
             }

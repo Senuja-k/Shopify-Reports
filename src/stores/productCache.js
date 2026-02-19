@@ -23,11 +23,11 @@ export const useProductCache = create()(
       cache: {},
       getEntry: (key) => {
         const entry = get().cache[key];
-        console.log('[productCache] getEntry', key, entry ? `found ${entry.products.length} products` : 'not found');
+        
         return entry;
       },
       setEntry: (key, entry) => {
-        console.log('[productCache] setEntry', key, `${entry.products.length} products`);
+        
         return set((state) => {
           const next = {
             ...state.cache,

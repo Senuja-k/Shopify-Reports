@@ -40,8 +40,8 @@ export async function exchangeCodeForToken(shop, code) {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     const edgeFunctionUrl = `${supabaseUrl}/functions/v1/exchange-shopify-code`;
     
-    console.log('[exchangeCodeForToken] Calling edge function:', edgeFunctionUrl);
-    console.log('[exchangeCodeForToken] With shop:', shop, 'code present:', !!code);
+    
+    
     
     const response = await fetch(edgeFunctionUrl, {
       method: 'POST',
@@ -54,7 +54,7 @@ export async function exchangeCodeForToken(shop, code) {
       }),
     });
 
-    console.log('[exchangeCodeForToken] Response status:', response.status);
+    
 
     if (!response.ok) {
       let errorData = {};
@@ -70,7 +70,7 @@ export async function exchangeCodeForToken(shop, code) {
     }
 
     const data = await response.json();
-    console.log('[exchangeCodeForToken] Success:', data.access_token ? 'token received' : 'no token');
+    
     
     if (data.error) {
       console.error('Token exchange error:', data);

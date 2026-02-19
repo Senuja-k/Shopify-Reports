@@ -5,11 +5,13 @@ Shopify Report has been successfully migrated from Firebase to Supabase for a mo
 ## 🎯 What Changed
 
 ### Removed
+
 - ❌ Firebase SDK
 - ❌ Firestore (NoSQL document database)
 - ❌ Firebase Authentication
 
 ### Added
+
 - ✅ Supabase SDK
 - ✅ PostgreSQL database
 - ✅ Supabase Authentication (built on PostgRES)
@@ -18,11 +20,13 @@ Shopify Report has been successfully migrated from Firebase to Supabase for a mo
 ## 📁 Files Changed
 
 ### New Files
+
 - **src/lib/supabase.ts** - Supabase client initialization
 - **src/lib/supabase-utils.ts** - Database CRUD operations
 - **SUPABASE_SETUP.md** - Complete Supabase setup guide
 
 ### Updated Files
+
 - **src/stores/authStore.ts** - Uses Supabase Auth instead of Firebase Auth
 - **src/stores/storeManagement.ts** - Uses Supabase database instead of Firestore
 - **src/stores/reportManagement.ts** - Uses Supabase database instead of Firestore
@@ -30,6 +34,7 @@ Shopify Report has been successfully migrated from Firebase to Supabase for a mo
 - **.env.example** - Updated with Supabase config
 
 ### Removed Files
+
 - ~~firebase.ts~~ (replaced with supabase.ts)
 - ~~firestore.ts~~ (replaced with supabase-utils.ts)
 - ~~FIREBASE_SETUP.md~~ (replaced with SUPABASE_SETUP.md)
@@ -37,27 +42,32 @@ Shopify Report has been successfully migrated from Firebase to Supabase for a mo
 ## 🚀 Key Benefits of Supabase
 
 ### 1. Open Source
+
 - Supabase is open-source, Firebase is proprietary
 - Can self-host if needed
 - Full transparency
 
 ### 2. PostgreSQL
+
 - Industry standard SQL database
 - More powerful queries
 - Better data relationships
 - Familiar to most developers
 
 ### 3. Row Level Security (RLS)
+
 - Fine-grained access control at database level
 - More secure than application-level checks
 - Automatic enforcement
 
 ### 4. Better Pricing
+
 - More generous free tier
 - Pay per usage rather than concurrent connections
 - Lower costs at scale
 
 ### 5. Open API
+
 - Full SQL access if needed
 - Less vendor lock-in
 - More control
@@ -65,6 +75,7 @@ Shopify Report has been successfully migrated from Firebase to Supabase for a mo
 ## 📊 Data Structure Comparison
 
 ### Firebase (Firestore - NoSQL)
+
 ```
 users/{userId}/
 ├── stores/{storeId}
@@ -73,6 +84,7 @@ users/{userId}/
 ```
 
 ### Supabase (PostgreSQL - SQL)
+
 ```
 auth.users (built-in)
 ├── id, email, created_at, ...
@@ -93,18 +105,22 @@ column_preferences
 ## 🔐 Security Features
 
 ### Row Level Security (RLS)
+
 Each table has policies like:
+
 ```sql
 CREATE POLICY "Users can view their own stores"
   ON stores FOR SELECT USING (auth.uid() = user_id);
 ```
 
 This means:
+
 - User can only query their own stores
 - Enforced at database level, not application
 - Can't bypass with clever SQL
 
 ### Authentication
+
 - Email/password signup and login
 - Secure session tokens
 - Auto-logout after inactivity
@@ -122,12 +138,14 @@ This means:
    - Enables Row Level Security
 
 3. **Add Environment Variables**
+
    ```bash
    VITE_SUPABASE_URL=https://your-project.supabase.co
    VITE_SUPABASE_ANON_KEY=your_key
    ```
 
 4. **Start App**
+
    ```bash
    npm run dev
    ```
@@ -140,23 +158,24 @@ See [SUPABASE_SETUP.md](SUPABASE_SETUP.md) for detailed instructions.
 
 ## 📈 Performance Comparison
 
-| Aspect | Firebase | Supabase |
-|--------|----------|----------|
-| Database Type | NoSQL (Firestore) | SQL (PostgreSQL) |
-| Query Power | Limited | Full SQL power |
-| Real-time | Built-in | Via Realtime API |
-| Scaling | Horizontal | Vertical + Horizontal |
-| RLS | Application-level | Database-level |
-| Pricing | Connection-based | Usage-based |
-| Open Source | ❌ | ✅ |
-| Self-host | ❌ | ✅ |
+| Aspect        | Firebase          | Supabase              |
+| ------------- | ----------------- | --------------------- |
+| Database Type | NoSQL (Firestore) | SQL (PostgreSQL)      |
+| Query Power   | Limited           | Full SQL power        |
+| Real-time     | Built-in          | Via Realtime API      |
+| Scaling       | Horizontal        | Vertical + Horizontal |
+| RLS           | Application-level | Database-level        |
+| Pricing       | Connection-based  | Usage-based           |
+| Open Source   | ❌                | ✅                    |
+| Self-host     | ❌                | ✅                    |
 
 ## ⚡ API Changes
 
 ### Authentication
+
 ```typescript
 // Firebase
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword } from "firebase/auth";
 await signInWithEmailAndPassword(auth, email, password);
 
 // Supabase
@@ -164,21 +183,23 @@ const { data, error } = await auth.signInWithPassword({ email, password });
 ```
 
 ### Database Reads
+
 ```typescript
 // Firebase
-const docs = await getDocs(collection(db, 'stores'));
+const docs = await getDocs(collection(db, "stores"));
 
 // Supabase
-const { data } = await supabase.from('stores').select('*');
+const { data } = await supabase.from("stores").select("*");
 ```
 
 ### Database Writes
+
 ```typescript
 // Firebase
-await setDoc(doc(db, 'stores', id), data);
+await setDoc(doc(db, "stores", id), data);
 
 // Supabase
-await supabase.from('stores').upsert(data);
+await supabase.from("stores").upsert(data);
 ```
 
 ## ✅ Migration Checklist
@@ -199,17 +220,20 @@ await supabase.from('stores').upsert(data);
 ## 🧪 Testing
 
 ### Authentication
+
 1. Signup with email/password
 2. Should create user in Supabase auth
 3. Can see user in Supabase console
 
 ### Data Persistence
+
 1. Add a store
 2. Refresh page
 3. Store should still be there
 4. Check Supabase console → stores table
 
 ### Multi-Device Sync
+
 1. Login on device 1
 2. Add a store
 3. Login on device 2 with same account
@@ -232,16 +256,19 @@ await supabase.from('stores').upsert(data);
 ## ⚠️ Important Notes
 
 ### API Key Security
+
 - `VITE_SUPABASE_ANON_KEY` is public (safe in browser)
 - `VITE_SUPABASE_SERVICE_ROLE_KEY` is secret (never share)
 - Row Level Security protects data even with public key
 
 ### Email Verification (Optional)
+
 - Supabase can enforce email verification
 - Configure in Authentication → Email Templates
 - Not required for basic setup
 
 ### Backups
+
 - Supabase includes automatic daily backups
 - Access backups in Settings → Backups
 - Can restore to point in time
@@ -249,6 +276,7 @@ await supabase.from('stores').upsert(data);
 ## 🚀 Migration Complete!
 
 Your Shopify Report dashboard is now running on Supabase with:
+
 - ✅ PostgreSQL database
 - ✅ Email/password authentication
 - ✅ Row Level Security
@@ -256,6 +284,7 @@ Your Shopify Report dashboard is now running on Supabase with:
 - ✅ Automatic backups
 
 ### Next Step
+
 Follow [SUPABASE_SETUP.md](SUPABASE_SETUP.md) to set up your Supabase project!
 
 ---

@@ -154,7 +154,7 @@ async function fetchPublicReportProducts(
       totalCount = -1;
     } else {
       totalCount = count || 0;
-      console.log(`[fetchPublicReportProducts] Total count: ${totalCount}`);
+      
     }
   } catch (error) {
     if (isAbortError(error)) {
@@ -175,7 +175,7 @@ async function fetchPublicReportProducts(
   // PARALLEL FETCHING: If we know the count, fetch all batches in parallel
   if (totalCount > 0) {
     const totalBatches = Math.ceil(totalCount / batchSize);
-    console.log(`[fetchPublicReportProducts] Fetching ${totalBatches} batches in parallel (max ${maxConcurrent} concurrent)`);
+    
 
     // Process batches in groups to limit concurrency
     for (let groupStart = 0; groupStart < totalBatches; groupStart += maxConcurrent) {
@@ -201,11 +201,11 @@ async function fetchPublicReportProducts(
         }
       }
 
-      console.log(`[fetchPublicReportProducts] Completed batches ${groupStart + 1}-${groupEnd} (${allProducts.length}/${totalCount} products)`);
+      
     }
   } else {
     // SEQUENTIAL FALLBACK: If count unknown, fetch sequentially until no more data
-    console.log('[fetchPublicReportProducts] Count unknown, falling back to sequential fetch');
+    
     let page = 0;
     let hasMore = true;
 
@@ -255,7 +255,7 @@ async function fetchPublicReportProducts(
   }
 
   const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
-  console.log(`[fetchPublicReportProducts] Complete: ${allProducts.length} products in ${elapsed}s`);
+  
   return { products: allProducts, lastSyncAt };
 }
 
@@ -339,12 +339,12 @@ export function PublicReport() {
   // After this, viewer changes stay local and don't affect the master
   useEffect(() => {
     if (report?.filterConfig) {
-      console.log('[PublicReport] Initializing viewer filters from master report config');
-      console.log('[PublicReport] Master filter config:', report.filterConfig);
-      console.log(`%c[PublicReport] ?? FILTERS FROM REPORT: ${report.filterConfig.items?.length || 0} filter items`, 'background: orange; color: white; font-weight: bold');
+      
+      
+      
       setFilterConfig(report.filterConfig);
     } else {
-      console.log('[PublicReport] No master filter config, using empty filters');
+      
       setFilterConfig({ items: [] });
     }
   }, [report?.id]); // Only re-initialize when report ID changes (different report loaded)
@@ -375,7 +375,7 @@ export function PublicReport() {
     try {
       // Step 1: Check organization sync status
       // This determines if data is ready for reporting
-      console.log('[PublicReport] Checking sync status for org:', report.organizationId);
+      
       const syncStatus = await getOrganizationSyncStatus(
         report.organizationId,
         controller.signal
@@ -383,11 +383,11 @@ export function PublicReport() {
 
       // If aborted during sync check, exit silently (no error, no retry)
       if (controller.signal.aborted) {
-        console.log('[PublicReport] Aborted during sync check (expected)');
+        
         return;
       }
 
-      console.log('[PublicReport] Sync status:', syncStatus);
+      
 
       // Step 2: If initial sync not complete, show sync-pending message
       if (!syncStatus.isReady) {
@@ -402,7 +402,7 @@ export function PublicReport() {
       }
 
       // Step 3: Fetch products from Supabase (pre-synced data)
-      console.log('[PublicReport] Fetching products from Supabase...');
+      
       const result = await fetchPublicReportProducts(
         report.storeId,
         report.organizationId,
@@ -411,7 +411,7 @@ export function PublicReport() {
 
       // If aborted during fetch, exit silently
       if (controller.signal.aborted) {
-        console.log('[PublicReport] Aborted during product fetch (expected)');
+        
         return;
       }
 
@@ -448,8 +448,8 @@ export function PublicReport() {
         console.warn(`%c[PublicReport] ?? REMOVED ${formattedProducts.length - deduplicatedProducts.length} DUPLICATE VARIANTS`, 'background: red; color: white; font-weight: bold');
       }
 
-      console.log(`[PublicReport] Loaded ${deduplicatedProducts.length} products successfully`);
-      console.log(`%c[PublicReport] ?? FINAL COUNT PUBLIC REPORT: ${deduplicatedProducts.length} products`, 'background: green; color: white; font-weight: bold; font-size: 14px');
+      
+      
 
       setFetchState({
         status: 'success',
@@ -461,7 +461,7 @@ export function PublicReport() {
     } catch (error) {
       // AbortErrors are expected during re-renders - handle silently
       if (isAbortError(error)) {
-        console.log('[PublicReport] Request aborted (normal during re-render)');
+        
         // Do NOT retry, do NOT show error - just exit
         return;
       }
@@ -523,7 +523,7 @@ export function PublicReport() {
     setIsExporting(true);
     try {
       const filteredProducts = applyFilters(fetchState.products, filterConfig);
-      console.log(`%c[PublicReport Export] ?? PRODUCTS BEFORE FILTER: ${fetchState.products.length}, AFTER FILTER: ${filteredProducts.length}`, 'background: orange; color: white; font-weight: bold; font-size: 14px');
+      
 
       if (filteredProducts.length === 0) {
         toast({
