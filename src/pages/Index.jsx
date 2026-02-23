@@ -17,7 +17,9 @@ import {
 } from "@/lib/serverQueries";
 import { refreshSessionSilently } from "@/lib/supabase";
 import {
-  syncStoresProductsFull
+  syncStoresProductsFull,
+  getOrgLastSyncTime,
+  isOrgSyncDue,
 } from "@/lib/shopifySync";
 import { useOrganization } from "@/stores/organizationStore";
 import { useAuth } from "@/stores/authStore.jsx";
@@ -136,6 +138,7 @@ function Index() {
   const statsAbortRef = useRef(null);
   const pageReqIdRef = useRef(0);
   const pageIndexRef = useRef(0);
+  const isSyncingRef = useRef(false);
   const lastNonEmptyStoreIdsRef = useRef([]);
   const lastNonEmptyStoresRef = useRef([]);
   const initializedContextRef = useRef("");
@@ -387,6 +390,9 @@ function Index() {
     fetchPageRef.current = fetchPage;
   }, [fetchPage]);
   useEffect(() => {
+    isSyncingRef.current = isSyncing;
+  }, [isSyncing]);
+  useEffect(() => {
     pageIndexRef.current = pageIndex;
   }, [pageIndex]);
 
@@ -458,33 +464,23 @@ function Index() {
         setIsInitialLoading(false);
         return;
       }
+      if (isSyncingRef.current) return;
 
       try {
         if (forceSync) {
           setIsInitialLoading(true);
           setIsSyncing(true);
-          syncStoresProductsFull(
+          await syncStoresProductsFull(
             userId,
             storesToFetch,
             activeOrganizationId || undefined,
-          )
-            .then(() => {
-              setLastSyncAt(new Date().toISOString());
-              return fetchPageRef.current({
-                page: typeof pageIndexRef.current === "number" ? pageIndexRef.current : 0,
-                showPageLoader: false,
-              });
-            })
-            .catch((e) => {
-              console.error("[Index] Background sync failed:", e);
-              toast({
-                title: "Sync failed",
-                description:
-                  e instanceof Error ? e.message : "Could not sync stores.",
-                variant: "destructive",
-              });
-            })
-            .finally(() => setIsSyncing(false));
+          );
+          setLastSyncAt(new Date().toISOString());
+          await fetchPageRef.current({
+            page: typeof pageIndexRef.current === "number" ? pageIndexRef.current : 0,
+            showPageLoader: false,
+            includeCount: true,
+          });
         } else {
           await fetchPageRef.current({
             page: typeof pageIndexRef.current === "number" ? pageIndexRef.current : 0,
@@ -494,9 +490,18 @@ function Index() {
       } catch (err) {
         if (!isAbortError(err)) {
           console.error("[Index] checkSyncAndLoad error:", err);
+          if (forceSync) {
+            toast({
+              title: "Sync failed",
+              description:
+                err instanceof Error ? err.message : "Could not sync stores.",
+              variant: "destructive",
+            });
+          }
           setError(err instanceof Error ? err.message : "Failed to load");
         }
       } finally {
+        if (forceSync) setIsSyncing(false);
         setIsInitialLoading(false);
       }
     },
@@ -553,13 +558,6 @@ function Index() {
     fetchPage,
   ]);
 
-  // Disabled automatic tab-focus refresh to avoid racing with user pagination actions.
-
-  // Add a periodic sync mechanism
-  useEffect(() => {
-    return () => {};
-  }, []);
-
   useEffect(() => {
     syncCheckRef.current = checkSyncAndLoad;
   }, [checkSyncAndLoad]);
@@ -601,11 +599,70 @@ function Index() {
     };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
-
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [sortField, sortDirection, appliedFilterConfig]);
+
+  // Auto-sync every ~2 hours (checked in background every 5 minutes).
+  useEffect(() => {
+    if (!isAuthenticated || !userId) return;
+    if (storeIds.length === 0) return;
+
+    let cancelled = false;
+
+    const maybeRunAutoSync = async () => {
+      if (cancelled) return;
+      if (document.visibilityState !== "visible") return;
+      if (isSyncingRef.current) return;
+
+      try {
+        const latestSync = await getOrgLastSyncTime(
+          activeOrganizationId || undefined,
+          storeIds,
+        );
+        if (latestSync) setLastSyncAt(latestSync);
+        if (!isOrgSyncDue(latestSync)) return;
+
+        setIsSyncing(true);
+        await syncStoresProductsFull(
+          userId,
+          storesToFetch,
+          activeOrganizationId || undefined,
+        );
+        if (cancelled) return;
+
+        const nowIso = new Date().toISOString();
+        setLastSyncAt(nowIso);
+        await fetchPageRef.current({
+          page:
+            typeof pageIndexRef.current === "number" ? pageIndexRef.current : 0,
+          showPageLoader: false,
+          includeCount: true,
+        });
+      } catch (e) {
+        if (!cancelled) console.error("[Index] Auto-sync failed:", e);
+      } finally {
+        if (!cancelled) setIsSyncing(false);
+      }
+    };
+
+    const startupTimer = setTimeout(maybeRunAutoSync, 3000);
+    const intervalId = setInterval(maybeRunAutoSync, 5 * 60 * 1000);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(startupTimer);
+      clearInterval(intervalId);
+    };
+  }, [
+    isAuthenticated,
+    userId,
+    storeIds,
+    storesToFetch,
+    activeOrganizationId,
+    setLastSyncAt,
+  ]);
 
   // Recover from stuck loading after tab sleep/background throttling.
   useEffect(() => {

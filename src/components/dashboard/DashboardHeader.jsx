@@ -202,11 +202,11 @@ export function DashboardHeader({
           <RefreshCw
             className={`h-4 w-4 ${isLoading || isSyncing ? "animate-spin" : ""}`}
           />
-          {isSyncing ? "Syncing…" : "Refresh"}
+          {isSyncing ? "Syncing..." : "Refresh"}
         </Button>
 
         <div className="text-xs text-muted-foreground ml-1">
-          Last sync: {lastSyncAt ? new Date(lastSyncAt).toLocaleString() : "�"}
+          Last sync: {lastSyncAt ? new Date(lastSyncAt).toLocaleString() : "Never"}
         </div>
         <Button
           size="sm"
@@ -232,3 +232,4 @@ export function DashboardHeader({
     </div>
   );
 }
+
