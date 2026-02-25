@@ -3,7 +3,7 @@ import {
   getSyncStatus,
   updateSyncStatus,
 } from '@/lib/shopify-sync-utils';
-import { supabase } from './supabase';
+import { supabase, isAbortError } from './supabase';
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 const UPSERT_BATCH_SIZE = 25;
@@ -67,6 +67,9 @@ export async function getOrgLastSyncTime(organizationId, storeIds) {
     const { data, error } = await query.maybeSingle();
 
     if (error) {
+      if (isAbortError(error)) {
+        return null;
+      }
       console.error('[getOrgLastSyncTime] Error:', error);
       return null;
     }
@@ -75,6 +78,7 @@ export async function getOrgLastSyncTime(organizationId, storeIds) {
     
     return lastSync;
   } catch (err) {
+    if (isAbortError(err)) return null;
     console.error('[getOrgLastSyncTime] Error:', err);
     return null;
   }

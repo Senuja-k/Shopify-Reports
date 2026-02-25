@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -24,9 +24,11 @@ export function ColumnSelector({ availableColumns }) {
     useColumnPreferences();
 
   // Initialize preferences when columns change
-  useState(() => {
-    initializePreferences(availableColumns);
-  });
+  useEffect(() => {
+    if (availableColumns && availableColumns.length) {
+      initializePreferences(availableColumns);
+    }
+  }, [availableColumns, initializePreferences]);
 
   // Ensure preferences is a Map before using .values()
   const prefMap = preferences instanceof Map ? preferences : new Map();

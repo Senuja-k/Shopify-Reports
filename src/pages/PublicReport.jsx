@@ -15,7 +15,7 @@ import { ProductsTable } from '../components/dashboard/ProductsTable';
 import { Loader2 } from 'lucide-react';
 import { SimpleHeader } from '../components/dashboard/SimpleHeader';
 import { supabasePublic } from '../lib/supabase';
-import { getReportByShareLink } from '../lib/supabase-utils';
+import { getReportByShareLinkPublic } from '../lib/supabase-utils';
 import { getOrganizationSyncStatus } from '../lib/shopify-sync-utils';
 
 /**
@@ -51,6 +51,20 @@ import { getOrganizationSyncStatus } from '../lib/shopify-sync-utils';
 // ============= TYPES =============
 
 // ============= HELPER FUNCTIONS =============
+
+/**
+ * Simple hash for password verification.
+ * Matches the hash function used in reportManagement store.
+ */
+function simpleHash(password) {
+  let hash = 0;
+  for (let i = 0; i < password.length; i++) {
+    const char = password.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash).toString(36);
+}
 
 /**
  * Check if an error is an AbortError (request cancellation).
@@ -264,7 +278,7 @@ async function fetchPublicReportProducts(
 export function PublicReport() {
   const { shareLink } = useParams();
   const { toast } = useToast();
-  const { getReportByShareLink, verifyReportPassword } = useReportManagement();
+  const { getReportByShareLink: getLocalReport, verifyReportPassword } = useReportManagement();
 
   // Report metadata state
   const [reportData, setReportData] = useState(null);
@@ -299,7 +313,7 @@ export function PublicReport() {
   const abortControllerRef = useRef(null);
 
   // Get local report if available (for logged-in users who created the report)
-  const localReport = shareLink ? getReportByShareLink(shareLink) : null;
+  const localReport = shareLink ? getLocalReport(shareLink) : null;
   const report = reportData || localReport;
 
   // ============= EFFECT: Load Report Metadata =============
@@ -321,7 +335,10 @@ export function PublicReport() {
     // Otherwise fetch from Supabase for anonymous access
     const loadReport = async () => {
       try {
-        const supabaseReport = await getReportFromSupabase(shareLink);
+        const supabaseReport = await getReportByShareLinkPublic(shareLink);
+        if (!supabaseReport) {
+          console.warn(`[PublicReport] No report found for share link: ${shareLink}`);
+        }
         setReportData(supabaseReport);
       } catch (error) {
         console.error('[PublicReport] Failed to load report metadata:', error);
@@ -502,7 +519,10 @@ export function PublicReport() {
     setAuthLoading(true);
     // Small delay for UX
     setTimeout(() => {
-      if (verifyReportPassword(report.id, password)) {
+      // Verify password directly against the fetched report data
+      // (works for both logged-in users and anonymous viewers)
+      const inputHash = simpleHash(password);
+      if (inputHash === report.password) {
         setIsAuthenticated(true);
         toast({ title: 'Access granted' });
       } else {

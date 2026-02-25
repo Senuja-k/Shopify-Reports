@@ -22,6 +22,8 @@ function getSupabaseClient() {
         detectSessionInUrl: true,
         storage: window.localStorage,
         storageKey: "supabase.auth.token",
+        // Disable navigator.locks to avoid AbortError when multiple tabs are open.
+        lock: false,
       },
       global: {
         headers: {
@@ -310,40 +312,75 @@ export async function ensureValidSession(
 }
 
 // ==========================================
+// ABORT ERROR DETECTION
+// ==========================================
+export function isAbortError(error) {
+  if (!error) return false;
+  if (error instanceof DOMException && error.name === 'AbortError') return true;
+  const msg = error?.message || String(error);
+  return (
+    error?.name === 'AbortError' ||
+    msg.includes('AbortError') ||
+    msg.includes('signal is aborted')
+  );
+}
+
+// ==========================================
 // INITIALIZATION HELPER WITH TIMEOUT
 // ==========================================
 export async function initializeAuthWithTimeout(timeoutMs = AUTH_TIMEOUT_MS) {
   
-  let session = null;
-  let timedOut = false;
-  try {
-    session = await withTimeout(
-      (async () => {
-        
-        const { data, error } = await auth.getSession();
-        if (error) {
-          console.warn("[initializeAuthWithTimeout] Session error:", error);
-          throw error;
-        }
-        
-        return data.session;
-      })(),
-      timeoutMs,
-      "initializeAuth",
-    );
-    
-    return { session, timedOut: false };
-  } catch (error) {
-    if (error instanceof AuthTimeoutError) {
-      timedOut = true;
-      console.error(
-        "[initializeAuthWithTimeout] TIMEOUT - auth initialization hung",
+  const MAX_RETRIES = 2;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    let session = null;
+    let timedOut = false;
+    try {
+      session = await withTimeout(
+        (async () => {
+          
+          const { data, error } = await auth.getSession();
+          if (error) {
+            console.warn("[initializeAuthWithTimeout] Session error:", error);
+            throw error;
+          }
+          
+          return data.session;
+        })(),
+        timeoutMs,
+        "initializeAuth",
       );
+      
+      return { session, timedOut: false };
+    } catch (error) {
+      if (error instanceof AuthTimeoutError) {
+        timedOut = true;
+        console.error(
+          "[initializeAuthWithTimeout] TIMEOUT - auth initialization hung",
+        );
+        return { session, timedOut, error };
+      }
+
+      // Supabase JS v2 can throw AbortError due to internal navigator.locks
+      // race conditions. Retry once after a short delay.
+      if (isAbortError(error) && attempt < MAX_RETRIES) {
+        console.debug(
+          `[initializeAuthWithTimeout] AbortError on attempt ${attempt}, retrying in 500ms...`,
+        );
+        await new Promise((r) => setTimeout(r, 500));
+        continue;
+      }
+
+      if (isAbortError(error)) {
+        return { session, timedOut, error };
+      }
+      console.error("[initializeAuthWithTimeout] Error:", error);
       return { session, timedOut, error };
     }
-    console.error("[initializeAuthWithTimeout] Error:", error);
-    return { session, timedOut, error };
   }
+
+  // Should never reach here, but just in case
+  return { session: null, timedOut: false, error: new Error('Max retries exceeded') };
 }
 
 // ==========================================

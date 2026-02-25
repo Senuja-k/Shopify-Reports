@@ -1,4 +1,4 @@
-import { supabase, ensureValidSession } from './supabase';
+import { supabase, supabasePublic, ensureValidSession } from './supabase';
 
 // ============= STORES =============
 
@@ -42,8 +42,11 @@ export async function getStores(userId, organizationId) {
     // Add timeout to prevent hanging. Use AUTH_TIMEOUT_MS so it's aligned
     // with other auth operations (user requested longer validation window).
     const { AUTH_TIMEOUT_MS } = await import('./supabase');
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error(`getStores timeout after ${AUTH_TIMEOUT_MS}ms`)), AUTH_TIMEOUT_MS)
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`getStores timeout after ${AUTH_TIMEOUT_MS}ms`)),
+        AUTH_TIMEOUT_MS,
+      )
     );
 
     // Use authenticated supabase client (required for RLS)
@@ -63,8 +66,7 @@ export async function getStores(userId, organizationId) {
                      errorMsg.includes('signal is aborted') ||
                      error.name === 'AbortError';
       if (isAbort) {
-        
-        return [];
+        return null;
       }
       
       console.error('[getStores] Query error:', error);
@@ -74,7 +76,7 @@ export async function getStores(userId, organizationId) {
         const session = await ensureValidSession(3000);
         if (!session) {
           console.error('[getStores] Could not refresh session');
-          return [];
+          return null;
         }
         // Retry the query once after session refresh
         const { data, error: retryError } = await supabase
@@ -84,7 +86,7 @@ export async function getStores(userId, organizationId) {
         
         if (retryError) {
           console.error('[getStores] Retry failed:', retryError);
-          return [];
+          return null;
         }
         
         return (data || []).map((store) => ({
@@ -115,11 +117,13 @@ export async function getStores(userId, organizationId) {
     // Don't log AbortErrors - they happen during rapid re-renders
     const errorMessage = (error)?.message || String(error);
     if (errorMessage.includes('abort') || errorMessage.includes('AbortError')) {
-      
-      return [];
+      return null;
+    }
+    if (errorMessage.includes('getStores timeout')) {
+      return null;
     }
     console.error('[getStores] Error:', error);
-    return [];
+    return null;
   }
 }
 
@@ -272,6 +276,42 @@ export async function getReportByShareLink(shareLink) {
   }
 }
 
+/**
+ * Fetch a report by its share link using the PUBLIC (unauthenticated) client.
+ * This allows anonymous users to open shared report links without being logged in.
+ * RLS policy "Allow public report lookup" permits anonymous SELECT where share_link IS NOT NULL.
+ */
+export async function getReportByShareLinkPublic(shareLink) {
+  try {
+    const { data, error } = await supabasePublic
+      .from('reports')
+      .select('*')
+      .eq('share_link', shareLink)
+      .single();
+
+    if (error && error.code !== 'PGRST116') throw error;
+
+    if (!data) {
+      return null;
+    }
+
+    return {
+      ...data,
+      selectedColumns: data.selected_columns || [],
+      filterConfig: data.filters || { items: [] },
+      createdAt: data.created_at,
+      updatedAt: data.updated_at,
+      storeId: data.store_id,
+      storeName: data.store_name,
+      shareLink: data.share_link,
+      organizationId: data.organization_id,
+    };
+  } catch (error) {
+    console.error('[getReportByShareLinkPublic] Error:', error);
+    return null;
+  }
+}
+
 export async function deleteReportFromSupabase(userId, organizationId, reportId) {
   try {
     
@@ -352,16 +392,24 @@ export async function getColumnPreferences(userId) {
 // ============= ORGANIZATIONS =============
 
 export async function getOrganizationsForUser(userId) {
-  
   try {
-    
     const { data, error } = await supabase
       .from('organization_members')
       .select('role, organization:organizations(id, name, created_at)')
       .eq('user_id', userId);
 
-    
-    if (error) throw error;
+    if (error) {
+      // AbortErrors are transient (Supabase internal lock race)
+      const msg = error.message || String(error);
+      if (
+        msg.includes('AbortError') ||
+        msg.includes('signal is aborted') ||
+        error.name === 'AbortError'
+      ) {
+        return null;
+      }
+      throw error;
+    }
 
     const orgs = (data || [])
       .map((row) => {
@@ -374,12 +422,15 @@ export async function getOrganizationsForUser(userId) {
         };
       })
       .filter(Boolean);
-    
-    
+
     return orgs;
   } catch (error) {
+    const msg = error?.message || String(error);
+    if (msg.includes('AbortError') || msg.includes('signal is aborted')) {
+      return null;
+    }
     console.error('[getOrganizationsForUser] Error loading organizations:', error);
-    return [];
+    return null;
   }
 }
 
@@ -391,7 +442,14 @@ export async function createOrganizationForUser(userId, name) {
     .single();
 
   if (error) {
-    console.error('[createOrganizationForUser] Error creating organization:', error);
+    // AbortErrors are transient — rethrow so caller gets a clear signal
+    // but log distinctly so it's not confused with real DB errors.
+    const msg = error.message || String(error);
+    if (msg.includes('AbortError') || msg.includes('signal is aborted') || error.name === 'AbortError') {
+      console.warn('[createOrganizationForUser] AbortError (transient) — skipping org creation this run');
+    } else {
+      console.error('[createOrganizationForUser] Error creating organization:', error);
+    }
     throw error;
   }
 
@@ -543,3 +601,5 @@ export async function removeOrganizationMember(organizationId, userId) {
 // - deleteMissingCachedProducts ? markDeletedProducts (soft delete)
 // - getStoreSyncStatus ? getSyncStatus
 // - upsertStoreSyncStatus ? updateSyncStatus
+
+

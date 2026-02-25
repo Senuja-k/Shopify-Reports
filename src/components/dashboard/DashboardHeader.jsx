@@ -36,6 +36,7 @@ export function DashboardHeader({
   onRefresh,
   isLoading,
   isExporting = false,
+  isExportDisabled = false,
   productCount,
   isSyncing,
   lastSyncAt,
@@ -211,7 +212,7 @@ export function DashboardHeader({
         <Button
           size="sm"
           onClick={onExport}
-          disabled={productCount === 0 || isExporting}
+          disabled={productCount === 0 || isExporting || isExportDisabled}
           className="gap-2 gradient-primary hover:opacity-90 transition-opacity"
         >
           <Download

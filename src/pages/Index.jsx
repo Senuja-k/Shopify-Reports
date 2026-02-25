@@ -148,6 +148,8 @@ function Index() {
   // ✅ NEW: prevent double refresh spam on tab return
   const returnDebounceRef = useRef(0);
   const tabRefreshInFlightRef = useRef(false);
+  const hasTriggeredHomeReloadRef = useRef(false);
+  const lastPathRef = useRef("");
 
   // ✅ NEW: freshness tracking to avoid unnecessary work
   const lastDataFetchAtRef = useRef(0);
@@ -169,11 +171,105 @@ function Index() {
   const activeOrganizationId = useOrganization(
     (state) => state.activeOrganizationId,
   );
-  const { user, isAuthenticated } = useAuth();
+  const {
+    user,
+    isAuthenticated,
+    isLoading: isAuthLoading,
+    isInitialized: isAuthInitialized,
+  } = useAuth();
   const userId = user?.id || null;
+  const canExport = isAuthenticated && isAuthInitialized && !isAuthLoading;
 
   // Cache store (instant restore after reload/back)
   const cache = useProductsPageCacheStore();
+
+  // If the app was backgrounded while on a different route, the global
+  // visibility handler will set `app-was-hidden`. When the user navigates
+  // back to the dashboard (mounting this component) and the flag is set,
+  // perform a full reload to ensure a clean state.
+  useEffect(() => {
+    try {
+      const wasHidden = sessionStorage.getItem("app-was-hidden");
+      const lastHiddenAt = Number(
+        sessionStorage.getItem("app-last-hidden-at") || 0,
+      );
+      const now = Date.now();
+
+      // Avoid reload loops: ignore hidden events that happened very recently
+      // (these are usually fired by the browser during an intentional reload
+      // / navigation). Only trigger a reload if the app was hidden for >2s.
+      const MIN_HIDDEN_MS = 2000;
+      if (
+        wasHidden &&
+        document.visibilityState === "visible" &&
+        now - lastHiddenAt > MIN_HIDDEN_MS
+      ) {
+        sessionStorage.removeItem("app-was-hidden");
+        sessionStorage.removeItem("app-last-hidden-at");
+        // Full reload to recover from potential background-throttled state
+        window.location.reload();
+      } else {
+        // If hidden flag exists but was very recent, just clear it to avoid
+        // repeated reload attempts.
+        if (wasHidden) {
+          sessionStorage.removeItem("app-was-hidden");
+          sessionStorage.removeItem("app-last-hidden-at");
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, []);
+
+  // Force a full reload when returning to the home page after leaving it.
+  // Uses a pending flag + debounce to avoid reload loops.
+  useEffect(() => {
+    const HOME_RELOAD_KEY = "home-reload-at";
+    const HOME_RELOAD_PENDING_KEY = "home-reload-pending";
+    const MIN_RELOAD_GAP_MS = 2000;
+
+    const prevPath = lastPathRef.current;
+    const nextPath = location.pathname;
+    lastPathRef.current = nextPath;
+
+    if (prevPath === "/" && nextPath !== "/") {
+      sessionStorage.setItem(HOME_RELOAD_PENDING_KEY, "1");
+      hasTriggeredHomeReloadRef.current = false;
+      return;
+    }
+
+    if (nextPath !== "/") {
+      hasTriggeredHomeReloadRef.current = false;
+      return;
+    }
+
+    const pending = sessionStorage.getItem(HOME_RELOAD_PENDING_KEY) === "1";
+    if (!pending) return;
+    if (hasTriggeredHomeReloadRef.current) return;
+    if (document.visibilityState !== "visible") return;
+
+    const now = Date.now();
+    const lastReloadAt = Number(sessionStorage.getItem(HOME_RELOAD_KEY) || 0);
+    if (now - lastReloadAt < MIN_RELOAD_GAP_MS) return;
+
+    hasTriggeredHomeReloadRef.current = true;
+    sessionStorage.removeItem(HOME_RELOAD_PENDING_KEY);
+    sessionStorage.setItem(HOME_RELOAD_KEY, String(now));
+    window.location.reload();
+  }, [location.pathname]);
+
+  // Suppress noisy AbortError unhandled rejections during reloads.
+  useEffect(() => {
+    const onUnhandledRejection = (event) => {
+      if (isAbortError(event?.reason)) {
+        event.preventDefault();
+      }
+    };
+    window.addEventListener("unhandledrejection", onUnhandledRejection);
+    return () => {
+      window.removeEventListener("unhandledrejection", onUnhandledRejection);
+    };
+  }, []);
 
   // Stores to query
   const storesToFetch = useMemo(() => {
@@ -455,6 +551,11 @@ function Index() {
     pageProducts.length, // ✅ important so fresh check updates
   ]);
 
+  // On mount/return, ensure stores are loaded and data is fetched.
+  useEffect(() => {
+    ensureStoresThenFetch();
+  }, [ensureStoresThenFetch]);
+
   // -------------------------------------------------------------------
   // Manual refresh/sync entry point
   // -------------------------------------------------------------------
@@ -587,6 +688,7 @@ function Index() {
       }
 
       if (document.visibilityState === "visible" && wasHiddenRef.current) {
+        // Clear hidden flag and persist view state
         wasHiddenRef.current = false;
         writeDashboardViewState({
           pageIndex: pageIndexRef.current,
@@ -594,6 +696,8 @@ function Index() {
           sortDirection,
           appliedFilterConfig,
         });
+
+        // Full reload when visibility returns to ensure a clean state
         window.location.reload();
       }
     };
@@ -720,6 +824,14 @@ function Index() {
 
   // Export
   const handleExport = async () => {
+    if (!canExport) {
+      toast({
+        title: "Session initializing",
+        description: "Please try again in a moment.",
+        variant: "destructive",
+      });
+      return;
+    }
     const columnsToExport = selectedColumns.length > 0 ? selectedColumns : [];
     if (columnsToExport.length === 0) {
       toast({
@@ -731,14 +843,35 @@ function Index() {
     }
 
     setIsExporting(true);
+    console.log("[handleExport] starting export", {
+      userId,
+      storeIds,
+      activeOrganizationId,
+      filter: appliedFilterConfig,
+    });
+    const fallbackId = setTimeout(() => {
+      console.warn("[handleExport] export fallback triggered (30s)");
+      setIsExporting(false);
+      toast({
+        title: "Export timeout",
+        description: "Export took too long and was cancelled.",
+        variant: "destructive",
+      });
+    }, 30_000);
     try {
-      const allProducts = await queryAllFilteredProducts({
-        userId,
-        storeIds,
-        organizationId: activeOrganizationId || undefined,
-        filterConfig: appliedFilterConfig,
-        sortField,
-        sortDirection,
+      const runExportQuery = () =>
+        queryAllFilteredProducts({
+          userId,
+          storeIds,
+          organizationId: activeOrganizationId || undefined,
+          filterConfig: appliedFilterConfig,
+          sortField,
+          sortDirection,
+        });
+
+      const allProducts = await runExportQuery();
+      console.log("[handleExport] fetched products for export", {
+        count: allProducts?.length,
       });
 
       if (allProducts.length === 0) {
@@ -748,6 +881,7 @@ function Index() {
           variant: "destructive",
         });
         setIsExporting(false);
+        clearTimeout(fallbackId);
         return;
       }
 
@@ -769,6 +903,8 @@ function Index() {
         variant: "destructive",
       });
     } finally {
+      console.log("[handleExport] finished (finally)");
+      clearTimeout(fallbackId);
       setIsExporting(false);
     }
   };
@@ -799,6 +935,7 @@ function Index() {
             isLoading={showBigSkeleton}
             isSyncing={isSyncing}
             isExporting={isExporting}
+            isExportDisabled={!canExport}
             productCount={stats.totalProducts}
             lastSyncAt={lastSyncAt}
           />

@@ -56,6 +56,9 @@ export const useStoreManagement = create()(
 
           
           const stores = await getStores(user.id, organizationId);
+          if (stores === null) {
+            return;
+          }
           
 
           const selectedStoreId = get().selectedStoreId;

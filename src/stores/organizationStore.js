@@ -44,6 +44,14 @@ export const useOrganization = create()(
           }
 
           let organizations = await getOrganizationsForUser(user.id);
+          if (organizations === null) {
+            return;
+          }
+
+          const existingOrgs = get().organizations || [];
+          if (organizations.length === 0 && existingOrgs.length > 0) {
+            return;
+          }
 
           if (organizations.length === 0) {
             

@@ -36,12 +36,44 @@ const SessionRefreshHandler = () => {
 const App = () => {
   const isAuthenticated = useAuth((state) => state.isAuthenticated);
   const initializeAuth = useAuth((state) => state.initializeAuth);
+  const isAuthInitialized = useAuth((state) => state.isInitialized);
+  const isAuthLoading = useAuth((state) => state.isLoading);
   const isRefreshingRef = useRef(false);
 
   useEffect(() => {
     initializeAuth();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Run only once on mount
+
+  // If auth initialization was aborted while tab was hidden, retry when visible.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === "visible" && !isAuthInitialized && !isAuthLoading) {
+        initializeAuth();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [initializeAuth, isAuthInitialized, isAuthLoading]);
+
+  // Global visibility handler: mark when the app becomes hidden so
+  // pages can detect that the user returned from background and
+  // optionally reload to clear stale state.
+  useEffect(() => {
+    const handleVisibility = () => {
+      try {
+        if (document.visibilityState === "hidden") {
+          sessionStorage.setItem("app-was-hidden", "1");
+          sessionStorage.setItem("app-last-hidden-at", String(Date.now()));
+        }
+      } catch (e) {
+        // ignore storage errors
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, []);
 
   // Removed: No auto reload or session refresh on tab visibility
 
@@ -51,7 +83,9 @@ const App = () => {
         <TooltipProvider>
           <Toaster />
           <Sonner />
-          <BrowserRouter>
+          <BrowserRouter
+            future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+          >
             <SessionRefreshHandler />
             <Routes>
               <Route path="/login" element={<Login />} />
