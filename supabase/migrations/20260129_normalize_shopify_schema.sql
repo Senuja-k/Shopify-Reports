@@ -39,7 +39,10 @@ CREATE TABLE IF NOT EXISTS shopify_products (
 CREATE INDEX IF NOT EXISTS idx_shopify_products_store_id ON shopify_products(store_id);
 CREATE INDEX IF NOT EXISTS idx_shopify_products_user_id ON shopify_products(user_id);
 CREATE INDEX IF NOT EXISTS idx_shopify_products_shopify_id ON shopify_products(shopify_product_id);
-CREATE INDEX IF NOT EXISTS idx_shopify_products_synced_at ON shopify_products(synced_at);
+DO $$ BEGIN
+  CREATE INDEX IF NOT EXISTS idx_shopify_products_synced_at ON shopify_products(synced_at);
+EXCEPTION WHEN undefined_column THEN NULL;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_shopify_products_is_deleted ON shopify_products(is_deleted);
 
 -- ============= VARIANTS TABLE =============
@@ -256,7 +259,7 @@ CREATE POLICY "Users can view their own products"
 
 DROP POLICY IF EXISTS "Users can modify their own products" ON shopify_products;
 CREATE POLICY "Users can modify their own products"
-  ON shopify_products FOR INSERT, UPDATE, DELETE
+  ON shopify_products FOR ALL
   WITH CHECK (auth.uid() = user_id);
 
 -- Variants RLS
@@ -268,7 +271,7 @@ CREATE POLICY "Users can view their own variants"
 
 DROP POLICY IF EXISTS "Users can modify their own variants" ON shopify_variants;
 CREATE POLICY "Users can modify their own variants"
-  ON shopify_variants FOR INSERT, UPDATE, DELETE
+  ON shopify_variants FOR ALL
   WITH CHECK (auth.uid() = user_id);
 
 -- Product Metafields RLS
@@ -280,7 +283,7 @@ CREATE POLICY "Users can view their own metafields"
 
 DROP POLICY IF EXISTS "Users can modify their own metafields" ON shopify_product_metafields;
 CREATE POLICY "Users can modify their own metafields"
-  ON shopify_product_metafields FOR INSERT, UPDATE, DELETE
+  ON shopify_product_metafields FOR ALL
   WITH CHECK (auth.uid() = user_id);
 
 -- Orders RLS
@@ -292,7 +295,7 @@ CREATE POLICY "Users can view their own orders"
 
 DROP POLICY IF EXISTS "Users can modify their own orders" ON shopify_orders;
 CREATE POLICY "Users can modify their own orders"
-  ON shopify_orders FOR INSERT, UPDATE, DELETE
+  ON shopify_orders FOR ALL
   WITH CHECK (auth.uid() = user_id);
 
 -- Order Line Items RLS
@@ -304,7 +307,7 @@ CREATE POLICY "Users can view their own line items"
 
 DROP POLICY IF EXISTS "Users can modify their own line items" ON shopify_order_line_items;
 CREATE POLICY "Users can modify their own line items"
-  ON shopify_order_line_items FOR INSERT, UPDATE, DELETE
+  ON shopify_order_line_items FOR ALL
   WITH CHECK (auth.uid() = user_id);
 
 -- Sync Status RLS
@@ -316,5 +319,5 @@ CREATE POLICY "Users can view their own sync status"
 
 DROP POLICY IF EXISTS "Users can modify their own sync status" ON shopify_sync_status;
 CREATE POLICY "Users can modify their own sync status"
-  ON shopify_sync_status FOR INSERT, UPDATE, DELETE
+  ON shopify_sync_status FOR ALL
   WITH CHECK (auth.uid() = user_id);

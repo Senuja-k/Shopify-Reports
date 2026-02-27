@@ -43,14 +43,18 @@ export async function exchangeCodeForToken(shop, code) {
     
     
     
+    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
     const response = await fetch(edgeFunctionUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${anonKey}`,
+        'apikey': anonKey,
       },
       body: JSON.stringify({
         shop: shop,
         code: code,
+        redirect_uri: shopifyOAuthConfig.redirectUri,
       }),
     });
 
@@ -65,8 +69,15 @@ export async function exchangeCodeForToken(shop, code) {
         console.error('Failed to parse error response:', text);
         errorData = { raw_error: text };
       }
-      console.error('Token exchange failed:', errorData);
-      throw new Error(errorData.details?.error_description || errorData.error || errorData.raw_error || 'Failed to exchange code for token');
+      console.error('Token exchange failed:', JSON.stringify(errorData, null, 2));
+      const shopifyErr = errorData.details?.error_description
+        || errorData.details?.error
+        || errorData.details?.errors
+        || errorData.details?.raw_error
+        || errorData.error
+        || errorData.raw_error
+        || 'Failed to exchange code for token';
+      throw new Error(String(shopifyErr));
     }
 
     const data = await response.json();

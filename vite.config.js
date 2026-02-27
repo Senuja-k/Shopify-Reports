@@ -7,6 +7,11 @@ export default defineConfig(() => ({
   server: {
     host: "::",
     port: 8082,
+    // Allow dev access from ngrok tunnel hostname used during local testing
+    // (add any other tunnel hostnames here as needed)
+    allowedHosts: [
+      'isanomalous-shelia-exasperatedly.ngrok-free.dev',
+    ],
   },
   plugins: [react()],
   resolve: {

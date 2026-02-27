@@ -1,16 +1,67 @@
-﻿import { serve } from "https://deno.land/std@0.168.0/http/server.js"
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, apikey',
+}
+
+const supabaseUrl = Deno.env.get('SUPABASE_URL')
+const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+const adminClient = supabaseUrl && serviceRoleKey
+  ? createClient(supabaseUrl, serviceRoleKey)
+  : null
+
+function normalizeShop(shop) {
+  if (!shop) return ''
+  return String(shop)
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/$/, '')
+}
+
+async function sha256Hex(input) {
+  const bytes = new TextEncoder().encode(input)
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+async function getCachedExchange(codeHash, shop) {
+  if (!adminClient) return null
+
+  const { data, error } = await adminClient
+    .from('shopify_code_cache')
+    .select('shop, access_token')
+    .eq('code_hash', codeHash)
+    .maybeSingle()
+
+  if (error) {
+    console.error('[exchange-shopify-code] Failed to read code cache:', error)
+    return null
+  }
+
+  if (!data || data.shop !== shop) return null
+  return data.access_token
+}
+
+async function cacheExchange(codeHash, shop, accessToken) {
+  if (!adminClient) return
+
+  const { error } = await adminClient
+    .from('shopify_code_cache')
+    .upsert({ code_hash: codeHash, shop, access_token: accessToken }, { onConflict: 'code_hash' })
+
+  if (error) {
+    console.error('[exchange-shopify-code] Failed to write code cache:', error)
+  }
 }
 
 serve(async (req) => {
   console.log('[exchange-shopify-code] Incoming request:', req.method)
-  
+
   try {
-    // Handle CORS preflight
     if (req.method === 'OPTIONS') {
       return new Response('ok', { headers: corsHeaders })
     }
@@ -18,11 +69,10 @@ serve(async (req) => {
     if (req.method !== 'POST') {
       return new Response(JSON.stringify({ error: 'Method not allowed' }), {
         status: 405,
-        headers,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
 
-    // Parse request body
     let body
     try {
       const text = await req.text()
@@ -36,8 +86,10 @@ serve(async (req) => {
       )
     }
 
-    const { shop, code } = body
-    
+    const shop = normalizeShop(body?.shop)
+    const code = body?.code
+    const redirectUriFromClient = body?.redirect_uri
+
     console.log('[exchange-shopify-code] Extracted shop:', shop, 'code:', code ? 'present' : 'missing')
 
     if (!shop || !code) {
@@ -47,10 +99,9 @@ serve(async (req) => {
       )
     }
 
-    // Get environment variables
     const clientId = Deno.env.get('SHOPIFY_CLIENT_ID')
     const clientSecret = Deno.env.get('SHOPIFY_CLIENT_SECRET')
-    const redirectUri = Deno.env.get('SHOPIFY_REDIRECT_URI')
+    const redirectUri = redirectUriFromClient || Deno.env.get('SHOPIFY_REDIRECT_URI')
 
     console.log('[exchange-shopify-code] Client ID available:', !!clientId)
     console.log('[exchange-shopify-code] Client Secret available:', !!clientSecret)
@@ -64,52 +115,48 @@ serve(async (req) => {
       )
     }
 
-    // Build the URL
+    const codeHash = await sha256Hex(`${shop}:${code}`)
+
+    const cachedToken = await getCachedExchange(codeHash, shop)
+    if (cachedToken) {
+      console.log('[exchange-shopify-code] Returning cached token for duplicate code exchange')
+      return new Response(
+        JSON.stringify({ access_token: cachedToken, shop, cached: true }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
     const tokenUrl = `https://${shop}/admin/oauth/access_token`
     console.log('[exchange-shopify-code] Requesting token from:', tokenUrl)
 
-    // Exchange code for access token
-    const tokenBody = `client_id=${encodeURIComponent(clientId)}&client_secret=${encodeURIComponent(clientSecret)}&code=${encodeURIComponent(code)}&redirect_uri=${encodeURIComponent(redirectUri)}&grant_type=authorization_code`
-    
+    const tokenBody = `client_id=${encodeURIComponent(clientId)}&client_secret=${encodeURIComponent(clientSecret)}&code=${encodeURIComponent(code)}&redirect_uri=${encodeURIComponent(redirectUri)}`
     console.log('[exchange-shopify-code] Request body prepared')
-    console.log('[exchange-shopify-code] Body sample:', tokenBody.substring(0, 80) + '...')
-    console.log('[exchange-shopify-code] client_id in body:', tokenBody.includes('client_id=') ? 'YES' : 'NO')
-    console.log('[exchange-shopify-code] client_secret in body:', tokenBody.includes('client_secret=') ? 'YES' : 'NO')
-    console.log('[exchange-shopify-code] code in body:', tokenBody.includes('code=') ? 'YES' : 'NO')
-    console.log('[exchange-shopify-code] redirect_uri in body:', tokenBody.includes('redirect_uri=') ? 'YES' : 'NO')
 
     const tokenResponse = await fetch(tokenUrl, {
       method: 'POST',
-      headers,
-      body,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: tokenBody,
     })
 
     console.log('[exchange-shopify-code] Shopify response status:', tokenResponse.status)
 
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text()
-      console.error('[exchange-shopify-code] Shopify error response:', errorText.substring(0, 500))
-      
+      console.error('[exchange-shopify-code] Shopify error response:', errorText.substring(0, 1000))
+
       let errorData = {}
       try {
         errorData = JSON.parse(errorText)
       } catch {
-        errorData = { raw_error: errorText.substring(0, 200) }
+        errorData = { raw_error: errorText }
       }
-      
+
       return new Response(
-        JSON.stringify({
-          error: 'Failed to exchange code for token',
-          details,
-        }),
-        {
-          status,
-          headers,
-        }
+        JSON.stringify({ error: 'Failed to exchange code for token', details: errorData }),
+        { status: tokenResponse.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    // Parse token response
     let tokenData
     try {
       tokenData = await tokenResponse.json()
@@ -126,26 +173,23 @@ serve(async (req) => {
     if (tokenData.error) {
       console.error('[exchange-shopify-code] Shopify OAuth error:', tokenData)
       return new Response(
-        JSON.stringify({
-          error,
-          error_description,
-        }),
+        JSON.stringify({ error: tokenData.error || 'oauth_error', details: tokenData }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    // Success
+    if (tokenData.access_token) {
+      await cacheExchange(codeHash, shop, tokenData.access_token)
+    }
+
     console.log('[exchange-shopify-code] OAuth exchange successful')
     return new Response(
-      JSON.stringify({
-        access_token,
-        shop,
-      }),
+      JSON.stringify({ access_token: tokenData.access_token, shop }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (error) {
     console.error('[exchange-shopify-code] Unhandled error:', error)
-    
+
     return new Response(
       JSON.stringify({
         error: 'Internal server error',

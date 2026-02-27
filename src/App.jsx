@@ -17,7 +17,7 @@ import ReportDiagnostics from "./pages/ReportDiagnostics";
 import ProductCountDiagnostics from "./pages/ProductCountDiagnostics";
 import ShopifyCallback from "./pages/ShopifyCallback";
 import { Organizations } from "./pages/Organizations";
-import { ensureValidSession } from "./lib/supabase";
+import { ensureValidSession, startSessionKeepAlive } from "./lib/supabase";
 
 const queryClient = new QueryClient();
 
@@ -42,6 +42,7 @@ const App = () => {
 
   useEffect(() => {
     initializeAuth();
+    startSessionKeepAlive();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Run only once on mount
 
@@ -56,24 +57,8 @@ const App = () => {
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [initializeAuth, isAuthInitialized, isAuthLoading]);
 
-  // Global visibility handler: mark when the app becomes hidden so
-  // pages can detect that the user returned from background and
-  // optionally reload to clear stale state.
-  useEffect(() => {
-    const handleVisibility = () => {
-      try {
-        if (document.visibilityState === "hidden") {
-          sessionStorage.setItem("app-was-hidden", "1");
-          sessionStorage.setItem("app-last-hidden-at", String(Date.now()));
-        }
-      } catch (e) {
-        // ignore storage errors
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibility);
-    return () => document.removeEventListener("visibilitychange", handleVisibility);
-  }, []);
+  // Global visibility handler removed — app no longer force-reloads.
+  // Session keep-alive in supabase.js handles token refresh on tab return.
 
   // Removed: No auto reload or session refresh on tab visibility
 

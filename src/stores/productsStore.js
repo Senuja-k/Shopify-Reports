@@ -11,8 +11,13 @@ export const useProductsStore = create(
     (set) => ({
       products: [],
       lastSyncAt: null,
+      // Global sync flag so other parts of the app can know when a
+      // background/full sync is in progress. This value is intentionally
+      // NOT persisted by the `partialize` config below.
+      isSyncing: false,
       setProducts: (products) => set({ products }),
       setLastSyncAt: (lastSyncAt) => set({ lastSyncAt }),
+      setIsSyncing: (isSyncing) => set({ isSyncing }),
       clearProducts: () => set({ products: [], lastSyncAt: null }),
     }),
     {
@@ -29,5 +34,6 @@ export const useProductsStore = create(
   )
 );
 
-// Clean up any stale localStorage entry from the old persisted store
-try { localStorage.removeItem('products-store'); } catch (_) {}
+// NOTE: do not remove the persisted `products-store` key here —
+// it intentionally stores `lastSyncAt` so the UI can show when the
+// last sync occurred. Removing it on every load caused "Last sync: Never".

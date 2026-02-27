@@ -1,4 +1,4 @@
-# Shopify Report
+# Stockify
 
 A powerful Shopify product analytics and reporting dashboard built with React, TypeScript, and Tailwind CSS.
 

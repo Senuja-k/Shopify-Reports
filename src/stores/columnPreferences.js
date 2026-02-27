@@ -82,7 +82,7 @@ export const useColumnPreferences = create()(
         set(() => {
           const newPrefs = new Map();
           columns.forEach((col, index) => {
-            newPrefs.set(col.key, { ...col, order: index });
+            newPrefs.set(col.key, { key: col.key, visible: col.visible ?? true, order: index });
           });
           return { preferences: newPrefs };
         });
@@ -128,7 +128,7 @@ export const useColumnPreferences = create()(
             if (!newPrefs.has(col.key)) {
               newPrefs.set(col.key, {
                 key: col.key,
-                visible: col.visible,
+                visible: col.visible ?? true,
                 order: newPrefs.size + index,
               });
             }

@@ -58,7 +58,7 @@ export default function Login() {
         
         toast({
           title: 'Account created',
-          description: 'Welcome to Shopify Report',
+          description: 'Welcome to Stockify',
         });
         navigate('/');
         setIsLoading(false);
@@ -68,7 +68,7 @@ export default function Login() {
       await login(email, password);
       toast({
         title: 'Login successful',
-        description: 'Welcome back to Shopify Report',
+        description: 'Welcome back to Stockify',
       });
       navigate('/');
       setIsLoading(false);
@@ -94,10 +94,9 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-2">
-          <div className="flex items-center justify-center mb-4">
-            <Store className="w-8 h-8 text-blue-600" />
+          <div className="text-center">
+            <img src="/logo-256.png" alt="Stockify" className="mx-auto mb-3 h-48 w-auto object-contain" />
           </div>
-          <CardTitle className="text-2xl text-center">Shopify Report</CardTitle>
           <CardDescription className="text-center">
           </CardDescription>
         </CardHeader>

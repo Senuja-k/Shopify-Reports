@@ -41,6 +41,7 @@ export function DashboardHeader({
   isSyncing,
   lastSyncAt,
 }) {
+  console.log('[DashboardHeader] render', { productCount, isExporting, isExportDisabled });
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   const {
@@ -90,145 +91,111 @@ export function DashboardHeader({
   };
 
   return (
-    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-      <div className="space-y-1">
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-lg gradient-primary">
-            <Store className="h-6 w-6 text-primary-foreground" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">
-              Product Analytics
-            </h1>
-            <p className="text-muted-foreground text-sm">
-              View and analyze your Shopify store products
-            </p>
-          </div>
+    <div>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-8">
+        <div className="flex-1 space-y-1">
+          <h1 className="text-2xl font-bold tracking-tight">Stockify</h1>
+          <p className="text-muted-foreground text-sm">View and analyze your Shopify store products</p>
         </div>
-      </div>
 
-      <div className="flex items-center gap-2">
-        <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-          <DialogContent className="sm:max-w-[420px]">
-            <DialogHeader>
-              <DialogTitle>Create organization</DialogTitle>
-              <DialogDescription>
-                Create a workspace to share stores and reports with your team.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-2">
-              <Label htmlFor="org-name">Organization name</Label>
-              <Input
-                id="org-name"
-                placeholder="Acme Inc"
-                value={organizationName}
-                onChange={(e) => setOrganizationName(e.target.value)}
-                disabled={isCreating}
-              />
-            </div>
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => setIsCreateOpen(false)}
-                disabled={isCreating}
-              >
-                Cancel
-              </Button>
-              <Button onClick={handleCreateOrganization} disabled={isCreating}>
-                {isCreating ? "Creating..." : "Create"}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {organizations.length === 0 && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setIsCreateOpen(true)}
-          >
-            Create Organization
-          </Button>
-        )}
-        {organizations.length > 0 && (
-          <Select
-            value={activeOrganizationId || undefined}
-            onValueChange={(value) => setActiveOrganization(value)}
-          >
-            <SelectTrigger className="h-8 w-[210px]">
-              <div className="flex items-center gap-2">
-                <Building2 className="h-4 w-4 text-muted-foreground" />
-                <SelectValue placeholder="Select organization" />
+        <div className="flex items-center gap-2">
+          <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
+            <DialogContent className="sm:max-w-[420px]">
+              <DialogHeader>
+                <DialogTitle>Create organization</DialogTitle>
+                <DialogDescription>
+                  Create a workspace to share stores and reports with your team.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-2">
+                <Label htmlFor="org-name">Organization name</Label>
+                <Input
+                  id="org-name"
+                  placeholder="Acme Inc"
+                  value={organizationName}
+                  onChange={(e) => setOrganizationName(e.target.value)}
+                  disabled={isCreating}
+                />
               </div>
-            </SelectTrigger>
-            <SelectContent>
-              {organizations.map((org) => (
-                <SelectItem key={org.id} value={org.id}>
-                  {org.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-        {user && (
-          <div className="text-sm text-muted-foreground">
-            Welcome, <span className="font-medium">{user.name}</span>
-          </div>
-        )}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => navigate("/organizations")}
-          className="gap-2"
-        >
-          <Users className="h-4 w-4" />
-          Organizations
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => navigate("/custom-reports")}
-          className="gap-2"
-        >
-          <FileText className="h-4 w-4" />
-          Custom Reports
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onRefresh}
-          disabled={isLoading || isSyncing}
-          className="gap-2"
-        >
-          <RefreshCw
-            className={`h-4 w-4 ${isLoading || isSyncing ? "animate-spin" : ""}`}
-          />
-          {isSyncing ? "Syncing..." : "Refresh"}
-        </Button>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setIsCreateOpen(false)} disabled={isCreating}>
+                  Cancel
+                </Button>
+                <Button onClick={handleCreateOrganization} disabled={isCreating}>
+                  {isCreating ? "Creating..." : "Create"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
 
-        <div className="text-xs text-muted-foreground ml-1">
-          Last sync: {lastSyncAt ? new Date(lastSyncAt).toLocaleString() : "Never"}
+          {organizations.length === 0 && (
+            <Button variant="outline" size="sm" onClick={() => setIsCreateOpen(true)}>
+              Create Organization
+            </Button>
+          )}
+
+          {organizations.length > 0 && (
+            <Select value={activeOrganizationId || undefined} onValueChange={(value) => setActiveOrganization(value)}>
+              <SelectTrigger className="h-8 w-[210px]">
+                <div className="flex items-center gap-2">
+                  <Building2 className="h-4 w-4 text-muted-foreground" />
+                  <SelectValue placeholder="Select organization" />
+                </div>
+              </SelectTrigger>
+              <SelectContent>
+                {organizations.map((org) => (
+                  <SelectItem key={org.id} value={org.id}>
+                    {org.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+
+          {user && (
+            <div className="text-sm text-muted-foreground">Welcome, <span className="font-medium">{user.name}</span></div>
+          )}
+
+          <Button variant="outline" size="sm" onClick={() => navigate("/organizations")} className="gap-2">
+            <Users className="h-4 w-4" />
+            Organizations
+          </Button>
+
+          <Button variant="outline" size="sm" onClick={() => navigate("/custom-reports")} className="gap-2">
+            <FileText className="h-4 w-4" />
+            Custom Reports
+          </Button>
+
+          <Button variant="outline" size="sm" onClick={onRefresh} disabled={isLoading || isSyncing} className="gap-2">
+            <RefreshCw className={`h-4 w-4 ${isLoading || isSyncing ? "animate-spin" : ""}`} />
+            {isSyncing ? "Syncing..." : "Refresh"}
+          </Button>
+
+          <div className="text-xs text-muted-foreground ml-1">Last sync: {lastSyncAt ? new Date(lastSyncAt).toLocaleString() : "Never"}</div>
+
+          <Button
+            size="sm"
+            onClick={() => {
+              console.log('[DashboardHeader] export button clicked', { productCount, isExporting, isExportDisabled });
+              try {
+                onExport?.();
+              } catch (e) {
+                console.error('[DashboardHeader] onExport threw', e);
+                throw e;
+              }
+            }}
+            disabled={productCount === 0 || isExporting || isExportDisabled}
+            className="gap-2 gradient-primary hover:opacity-90 transition-opacity"
+          >
+            <Download className={`h-4 w-4 ${isExporting ? "animate-spin" : ""}`} />
+            {isExporting ? "Exporting..." : "Export to Excel"}
+          </Button>
+
+          <Button variant="outline" size="sm" onClick={handleLogout} className="gap-2">
+            <LogOut className="h-4 w-4" />
+            Logout
+          </Button>
         </div>
-        <Button
-          size="sm"
-          onClick={onExport}
-          disabled={productCount === 0 || isExporting || isExportDisabled}
-          className="gap-2 gradient-primary hover:opacity-90 transition-opacity"
-        >
-          <Download
-            className={`h-4 w-4 ${isExporting ? "animate-spin" : ""}`}
-          />
-          {isExporting ? "Exporting..." : "Export to Excel"}
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleLogout}
-          className="gap-2"
-        >
-          <LogOut className="h-4 w-4" />
-          Logout
-        </Button>
       </div>
     </div>
   );

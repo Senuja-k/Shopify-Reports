@@ -15,12 +15,8 @@ import {
   queryAllFilteredProducts,
   queryProductStats,
 } from "@/lib/serverQueries";
-import { refreshSessionSilently } from "@/lib/supabase";
-import {
-  syncStoresProductsFull,
-  getOrgLastSyncTime,
-  isOrgSyncDue,
-} from "@/lib/shopifySync";
+import { refreshSessionSilently, ensureValidSession } from "@/lib/supabase";
+import { syncStoresProductsFull, getOrgLastSyncTime } from "@/lib/shopifySync";
 import { useOrganization } from "@/stores/organizationStore";
 import { useAuth } from "@/stores/authStore.jsx";
 import { useLocation } from "react-router-dom";
@@ -94,7 +90,10 @@ function Index() {
     const v = savedViewRef.current?.pageIndex;
     return Number.isInteger(v) && v >= 0 ? v : 0;
   });
-  const pageSize = 25;
+  const [pageSize, setPageSize] = useState(() => {
+    const v = savedViewRef.current?.pageSize;
+    return Number.isInteger(v) && v > 0 ? v : 25;
+  });
   const [sortField, setSortField] = useState(
     () => savedViewRef.current?.sortField ?? null,
   );
@@ -178,84 +177,124 @@ function Index() {
     isInitialized: isAuthInitialized,
   } = useAuth();
   const userId = user?.id || null;
-  const canExport = isAuthenticated && isAuthInitialized && !isAuthLoading;
+  const canExport = !!(isAuthenticated && isAuthInitialized && !isAuthLoading);
+  console.log('[Index] render auth state', { isAuthenticated, isAuthInitialized, isAuthLoading, canExport });
 
   // Cache store (instant restore after reload/back)
   const cache = useProductsPageCacheStore();
 
-  // If the app was backgrounded while on a different route, the global
-  // visibility handler will set `app-was-hidden`. When the user navigates
-  // back to the dashboard (mounting this component) and the flag is set,
-  // perform a full reload to ensure a clean state.
+  // If the app was backgrounded while on a different route, soft-recover
+  // (refresh session + refetch data) instead of a full page reload.
   useEffect(() => {
     try {
       const wasHidden = sessionStorage.getItem("app-was-hidden");
-      const lastHiddenAt = Number(
-        sessionStorage.getItem("app-last-hidden-at") || 0,
-      );
-      const now = Date.now();
-
-      // Avoid reload loops: ignore hidden events that happened very recently
-      // (these are usually fired by the browser during an intentional reload
-      // / navigation). Only trigger a reload if the app was hidden for >2s.
-      const MIN_HIDDEN_MS = 2000;
-      if (
-        wasHidden &&
-        document.visibilityState === "visible" &&
-        now - lastHiddenAt > MIN_HIDDEN_MS
-      ) {
+      if (wasHidden) {
         sessionStorage.removeItem("app-was-hidden");
         sessionStorage.removeItem("app-last-hidden-at");
-        // Full reload to recover from potential background-throttled state
-        window.location.reload();
-      } else {
-        // If hidden flag exists but was very recent, just clear it to avoid
-        // repeated reload attempts.
-        if (wasHidden) {
-          sessionStorage.removeItem("app-was-hidden");
-          sessionStorage.removeItem("app-last-hidden-at");
-        }
+        // Soft recovery: refresh session then refetch
+        ensureValidSession(8000, true).then(() => {
+          fetchPageRef.current?.({
+            page: typeof pageIndexRef.current === "number" ? pageIndexRef.current : 0,
+            showPageLoader: false,
+            includeCount: true,
+          });
+        }).catch(() => {});
       }
     } catch (e) {
       // ignore
     }
   }, []);
 
-  // Force a full reload when returning to the home page after leaving it.
-  // Uses a pending flag + debounce to avoid reload loops.
+  // If Index unmounts while on the home page, mark a pending reload so
+  // when the user navigates back (and Index remounts) we can force a reload.
   useEffect(() => {
-    const HOME_RELOAD_KEY = "home-reload-at";
-    const HOME_RELOAD_PENDING_KEY = "home-reload-pending";
-    const MIN_RELOAD_GAP_MS = 2000;
+    try {
+      // cleanup runs on unmount — capture current path
+      return () => {
+        try {
+          if (location && location.pathname === "/") {
+            sessionStorage.setItem("home-reload-pending", "1");
+            console.log('[Index] marking home-reload-pending on unmount');
+          }
+        } catch (e) {
+          // ignore
+        }
+      };
+    } catch (e) {
+      // ignore
+    }
+    // Depend on location.pathname so the cleanup knows the current route
+  }, [location.pathname]);
 
+  // On mount (or when location changes), if a pending reload was set while
+  // Index was unmounted, trigger the full reload now.
+  useEffect(() => {
+    try {
+      const pending = sessionStorage.getItem("home-reload-pending") === "1";
+      if (pending) {
+          sessionStorage.removeItem("home-reload-pending");
+          console.log('[Index] home-reload-pending detected on mount');
+          if (location && location.pathname === "/") {
+            if (isSyncingRef.current) {
+              console.log('[Index] reload skipped due to active sync; performing soft recovery');
+              ensureValidSession(8000, true).then(() => {
+                fetchPageRef.current?.({
+                  page: typeof pageIndexRef.current === "number" ? pageIndexRef.current : 0,
+                  showPageLoader: false,
+                  includeCount: true,
+                });
+              }).catch(() => {});
+            } else {
+              window.location.reload();
+            }
+          }
+        }
+    } catch (e) {
+      // ignore
+    }
+  }, [location.pathname]);
+
+  // When returning to the home page after leaving it, soft-recover
+  // Reload when route changes into home ("/") from another route.
+  // Skip the reload on initial mount (prevPath may be empty).
+  useEffect(() => {
     const prevPath = lastPathRef.current;
     const nextPath = location.pathname;
+    console.log('[Index] route-change detected', { prevPath, nextPath });
+    // Update lastPathRef for next navigation
     lastPathRef.current = nextPath;
 
-    if (prevPath === "/" && nextPath !== "/") {
-      sessionStorage.setItem(HOME_RELOAD_PENDING_KEY, "1");
-      hasTriggeredHomeReloadRef.current = false;
-      return;
+    // If this is the initial mount, prevPath will be falsy — skip reload.
+    if (!prevPath) return;
+
+    // If we navigated into home from a different path, do a full reload.
+    if (nextPath === '/' && prevPath !== '/' && !hasTriggeredHomeReloadRef.current) {
+      try {
+        console.log('[Index] navigated into home — performing full reload');
+        hasTriggeredHomeReloadRef.current = true;
+        if (isSyncingRef.current) {
+          console.log('[Index] navigated into home but sync active — skipping full reload and doing soft recovery');
+          ensureValidSession(8000, true).then(() => {
+            fetchPageRef.current?.({
+              page: typeof pageIndexRef.current === 'number' ? pageIndexRef.current : 0,
+              showPageLoader: false,
+              includeCount: true,
+            });
+          }).catch(() => {});
+        } else {
+          window.location.reload();
+        }
+      } catch (e) {
+        console.warn('[Index] reload failed, falling back to soft recovery', e);
+        ensureValidSession(8000, true).then(() => {
+          fetchPageRef.current?.({
+            page: typeof pageIndexRef.current === 'number' ? pageIndexRef.current : 0,
+            showPageLoader: false,
+            includeCount: true,
+          });
+        }).catch(() => {});
+      }
     }
-
-    if (nextPath !== "/") {
-      hasTriggeredHomeReloadRef.current = false;
-      return;
-    }
-
-    const pending = sessionStorage.getItem(HOME_RELOAD_PENDING_KEY) === "1";
-    if (!pending) return;
-    if (hasTriggeredHomeReloadRef.current) return;
-    if (document.visibilityState !== "visible") return;
-
-    const now = Date.now();
-    const lastReloadAt = Number(sessionStorage.getItem(HOME_RELOAD_KEY) || 0);
-    if (now - lastReloadAt < MIN_RELOAD_GAP_MS) return;
-
-    hasTriggeredHomeReloadRef.current = true;
-    sessionStorage.removeItem(HOME_RELOAD_PENDING_KEY);
-    sessionStorage.setItem(HOME_RELOAD_KEY, String(now));
-    window.location.reload();
   }, [location.pathname]);
 
   // Suppress noisy AbortError unhandled rejections during reloads.
@@ -487,6 +526,14 @@ function Index() {
   }, [fetchPage]);
   useEffect(() => {
     isSyncingRef.current = isSyncing;
+    try {
+      // Mirror local page-level sync state into the global products store
+      // so other modules (e.g. organizationStore) can check it.
+      const setter = useProductsStore.getState().setIsSyncing;
+      if (typeof setter === 'function') setter(isSyncing);
+    } catch (e) {
+      // ignore
+    }
   }, [isSyncing]);
   useEffect(() => {
     pageIndexRef.current = pageIndex;
@@ -571,12 +618,47 @@ function Index() {
         if (forceSync) {
           setIsInitialLoading(true);
           setIsSyncing(true);
-          await syncStoresProductsFull(
-            userId,
-            storesToFetch,
-            activeOrganizationId || undefined,
-          );
-          setLastSyncAt(new Date().toISOString());
+          // Prefer server-side sync to avoid browser background throttling.
+          const payload = {
+            storeIds: (storesToFetch || []).map((s) => s.id),
+            organizationId: activeOrganizationId || null,
+          };
+          if (typeof supabase !== 'undefined' && supabase.functions && supabase.functions.invoke) {
+            try {
+              const fnResp = await supabase.functions.invoke('sync-stores', { body: JSON.stringify(payload) });
+              if (fnResp && fnResp.data) {
+                console.log('[Index] server-side sync response', fnResp.data);
+              } else {
+                console.warn('[Index] server-side sync returned no data; falling back to client sync');
+                await syncStoresProductsFull(userId, storesToFetch, activeOrganizationId || undefined);
+              }
+            } catch (err) {
+              console.error('[Index] server-side sync failed, falling back to client sync', err);
+              await syncStoresProductsFull(userId, storesToFetch, activeOrganizationId || undefined);
+            }
+          } else {
+            // No server functions available in this environment — run client-side sync
+            await syncStoresProductsFull(userId, storesToFetch, activeOrganizationId || undefined);
+          }
+          try {
+            // Prefer authoritative DB timestamp from shopify_store_sync_status
+            const storeIdsForQuery = (storesToFetch || []).map((s) => s.id);
+            const dbLast = await getOrgLastSyncTime(
+              activeOrganizationId || undefined,
+              storeIdsForQuery,
+            );
+            const ts = dbLast || new Date().toISOString();
+            console.log('[Index] set lastSyncAt (DB or fallback) ->', ts);
+            setLastSyncAt(ts);
+          } catch (e) {
+            console.warn('[Index] failed to read last sync from DB, falling back to client timestamp', e);
+            try {
+              const ts = new Date().toISOString();
+              setLastSyncAt(ts);
+            } catch (err) {
+              console.error('[Index] failed to set lastSyncAt fallback:', err);
+            }
+          }
           await fetchPageRef.current({
             page: typeof pageIndexRef.current === "number" ? pageIndexRef.current : 0,
             showPageLoader: false,
@@ -670,10 +752,11 @@ function Index() {
       sortField,
       sortDirection,
       appliedFilterConfig,
+      pageSize,
     });
-  }, [pageIndex, sortField, sortDirection, appliedFilterConfig]);
+  }, [pageIndex, sortField, sortDirection, appliedFilterConfig, pageSize]);
 
-  // Refresh on tab switch (hidden -> visible) and restore state from sessionStorage.
+  // Soft-recover on tab switch (hidden -> visible): refresh session + refetch data.
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === "hidden") {
@@ -683,22 +766,54 @@ function Index() {
           sortField,
           sortDirection,
           appliedFilterConfig,
+          pageSize,
         });
         return;
       }
 
       if (document.visibilityState === "visible" && wasHiddenRef.current) {
-        // Clear hidden flag and persist view state
         wasHiddenRef.current = false;
         writeDashboardViewState({
           pageIndex: pageIndexRef.current,
           sortField,
           sortDirection,
           appliedFilterConfig,
+          pageSize,
         });
 
-        // Full reload when visibility returns to ensure a clean state
-        window.location.reload();
+        // If we're on the dashboard home page, perform a full reload to
+        // ensure a clean app state (user requested behavior). Otherwise
+        // perform the previous soft-recovery flow.
+        try {
+          if (location && location.pathname === "/") {
+            if (isSyncingRef.current) {
+              console.log('[Index] Home visible but sync active — skipping full reload and doing soft recovery');
+              ensureValidSession(8000, true).then(() => {
+                fetchPageRef.current?.({
+                  page: typeof pageIndexRef.current === "number" ? pageIndexRef.current : 0,
+                  showPageLoader: false,
+                  includeCount: true,
+                });
+              }).catch(() => {});
+              return;
+            }
+            console.log('[Index] Home visible — performing full page reload');
+            // Force a full reload from the server
+            window.location.reload();
+            return;
+          }
+        } catch (e) {
+          console.warn('[Index] failed to perform location check for reload', e);
+        }
+
+        // Soft recovery for other routes: refresh session then refetch current page
+        ensureValidSession(8000, true).then(() => {
+          fetchPageRef.current?.({
+            page: typeof pageIndexRef.current === "number" ? pageIndexRef.current : 0,
+            showPageLoader: false,
+            includeCount: true,
+          });
+        }).catch(() => {});
       }
     };
 
@@ -708,65 +823,7 @@ function Index() {
     };
   }, [sortField, sortDirection, appliedFilterConfig]);
 
-  // Auto-sync every ~2 hours (checked in background every 5 minutes).
-  useEffect(() => {
-    if (!isAuthenticated || !userId) return;
-    if (storeIds.length === 0) return;
-
-    let cancelled = false;
-
-    const maybeRunAutoSync = async () => {
-      if (cancelled) return;
-      if (document.visibilityState !== "visible") return;
-      if (isSyncingRef.current) return;
-
-      try {
-        const latestSync = await getOrgLastSyncTime(
-          activeOrganizationId || undefined,
-          storeIds,
-        );
-        if (latestSync) setLastSyncAt(latestSync);
-        if (!isOrgSyncDue(latestSync)) return;
-
-        setIsSyncing(true);
-        await syncStoresProductsFull(
-          userId,
-          storesToFetch,
-          activeOrganizationId || undefined,
-        );
-        if (cancelled) return;
-
-        const nowIso = new Date().toISOString();
-        setLastSyncAt(nowIso);
-        await fetchPageRef.current({
-          page:
-            typeof pageIndexRef.current === "number" ? pageIndexRef.current : 0,
-          showPageLoader: false,
-          includeCount: true,
-        });
-      } catch (e) {
-        if (!cancelled) console.error("[Index] Auto-sync failed:", e);
-      } finally {
-        if (!cancelled) setIsSyncing(false);
-      }
-    };
-
-    const startupTimer = setTimeout(maybeRunAutoSync, 3000);
-    const intervalId = setInterval(maybeRunAutoSync, 5 * 60 * 1000);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(startupTimer);
-      clearInterval(intervalId);
-    };
-  }, [
-    isAuthenticated,
-    userId,
-    storeIds,
-    storesToFetch,
-    activeOrganizationId,
-    setLastSyncAt,
-  ]);
+  // Auto-sync logic removed: manual refresh via `checkSyncAndLoad(true)` remains.
 
   // Recover from stuck loading after tab sleep/background throttling.
   useEffect(() => {
@@ -810,8 +867,21 @@ function Index() {
 
   // Table callbacks
   const handlePageChange = useCallback((newPage) => setPageIndex(newPage), []);
-  // Dashboard page size is fixed at 25 to keep requests lightweight.
-  const handlePageSizeChange = useCallback(() => {}, []);
+  const handlePageSizeChange = useCallback(
+    (newSize) => {
+      const size = Number(newSize) || 25;
+      setPageSize(size);
+      setPageIndex(0);
+      writeDashboardViewState({
+        pageIndex: 0,
+        sortField,
+        sortDirection,
+        appliedFilterConfig,
+        pageSize: size,
+      });
+    },
+    [setPageSize, setPageIndex, sortField, sortDirection, appliedFilterConfig],
+  );
   const handleSortChange = useCallback((field, dir) => {
     setSortField(field);
     setSortDirection(dir);
@@ -824,6 +894,7 @@ function Index() {
 
   // Export
   const handleExport = async () => {
+    console.log('[Index] handleExport called', { canExport, isExporting });
     if (!canExport) {
       toast({
         title: "Session initializing",
@@ -850,14 +921,14 @@ function Index() {
       filter: appliedFilterConfig,
     });
     const fallbackId = setTimeout(() => {
-      console.warn("[handleExport] export fallback triggered (30s)");
+      console.warn("[handleExport] export fallback triggered (120s)");
       setIsExporting(false);
       toast({
         title: "Export timeout",
         description: "Export took too long and was cancelled.",
         variant: "destructive",
       });
-    }, 30_000);
+    }, 120_000);
     try {
       const runExportQuery = () =>
         queryAllFilteredProducts({
@@ -869,7 +940,25 @@ function Index() {
           sortDirection,
         });
 
-      const allProducts = await runExportQuery();
+      // Retry on transient AbortError from the Supabase SDK (e.g. navigator.locks, network aborts)
+      const maxAttempts = 3;
+      let attempt = 0;
+      let allProducts;
+      while (attempt < maxAttempts) {
+        try {
+          allProducts = await runExportQuery();
+          break;
+        } catch (e) {
+          if (isAbortError(e) && attempt < maxAttempts - 1) {
+            attempt += 1;
+            const backoff = 300 * attempt;
+            console.warn(`[handleExport] transient AbortError, retrying export (attempt ${attempt}/${maxAttempts}) after ${backoff}ms`);
+            await new Promise((r) => setTimeout(r, backoff));
+            continue;
+          }
+          throw e;
+        }
+      }
       console.log("[handleExport] fetched products for export", {
         count: allProducts?.length,
       });
@@ -889,7 +978,66 @@ function Index() {
         ...p,
         storeName: storesToFetch.find((s) => s.id === p.store_id)?.name || "",
       }));
+      // Debug logging for export
+      console.log('[Index] export: columnsToExport', columnsToExport);
+      console.log('[Index] export: sample', withNames[0]);
 
+      // Attempt server-side export via Supabase Edge Function for large exports.
+      try {
+        const payload = {
+          storeIds,
+          organizationId: activeOrganizationId || null,
+          filterConfig: appliedFilterConfig,
+          selectedColumns: columnsToExport,
+        };
+        // Try using the Supabase Functions API (supabase client available globally)
+        // If it fails, fall back to client-side export.
+        if (typeof supabase !== 'undefined' && supabase.functions && supabase.functions.invoke) {
+          try {
+            const fnResp = await supabase.functions.invoke('export-products', { body: JSON.stringify(payload) });
+            if (fnResp.error) throw fnResp.error;
+
+            // fnResp.data may be ArrayBuffer / string depending on client; handle both
+            let blob;
+            if (fnResp.data instanceof ArrayBuffer) {
+              blob = new Blob([fnResp.data], { type: 'text/csv' });
+            } else if (typeof fnResp.data === 'string') {
+              blob = new Blob([fnResp.data], { type: 'text/csv' });
+            } else if (fnResp.arrayBuffer) {
+              const ab = await fnResp.arrayBuffer();
+              blob = new Blob([ab], { type: 'text/csv' });
+            }
+
+            if (blob) {
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = 'shopify-products-export.csv';
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              URL.revokeObjectURL(url);
+              toast({ title: 'Export started', description: 'Your export is downloading.' });
+            } else {
+              // Fallback to client-side export
+              exportToExcel(withNames, columnsToExport, 'shopify-products');
+            }
+
+            // end server export
+            clearTimeout(fallbackId);
+            setIsExporting(false);
+            return;
+          } catch (fnErr) {
+            console.warn('[Index] server-side export failed, falling back to client export:', fnErr);
+            // continue to client-side export
+          }
+        }
+
+      } catch (e) {
+        console.warn('[Index] server export attempt error', e);
+      }
+
+      // client-side fallback
       exportToExcel(withNames, columnsToExport, "shopify-products");
       toast({
         title: "Export successful",
@@ -897,11 +1045,23 @@ function Index() {
       });
     } catch (err) {
       console.error("[handleExport] Error:", err);
-      toast({
-        title: "Export failed",
-        description: err instanceof Error ? err.message : "An error occurred.",
-        variant: "destructive",
-      });
+      const msg = String(err?.message || err?.details || err || '');
+      const isNetwork = msg.toLowerCase().includes('failed to fetch') || msg.toLowerCase().includes('network');
+      const isCors = /cors|access-control|blocked/i.test(msg);
+      if (isNetwork || isCors) {
+        toast({
+          title: 'Export failed (network)',
+          description:
+            'Could not fetch data from Supabase. This looks like a network or CORS issue — try refreshing, using a different browser/network, or check your Supabase CORS settings.',
+          variant: 'destructive',
+        });
+      } else {
+        toast({
+          title: 'Export failed',
+          description: err instanceof Error ? err.message : 'An error occurred.',
+          variant: 'destructive',
+        });
+      }
     } finally {
       console.log("[handleExport] finished (finally)");
       clearTimeout(fallbackId);

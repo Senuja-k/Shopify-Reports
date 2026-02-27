@@ -64,11 +64,11 @@ serve(async (req) => {
       body: JSON.stringify({
         from: "onboarding@resend.dev",
         to,
-        subject: "Email Verification - Shopify Report",
+        subject: "Email Verification - Stockify",
         html: `
           <div style="font-family, sans-serif; max-width: 600px; margin: 0 auto;">
             <div style="background: linear-gradient(to right, #0f172a, #1e293b); padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
-              <h1 style="color: white; margin: 0;">Shopify Report</h1>
+              <h1 style="color: white; margin: 0;">Stockify</h1>
             </div>
             <div style="background: #f8fafc; padding: 40px; border-radius: 0 0 8px 8px;">
               <h2 style="color: #1e293b; text-align: center;">Verify Your Email</h2>

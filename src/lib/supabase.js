@@ -384,6 +384,53 @@ export async function initializeAuthWithTimeout(timeoutMs = AUTH_TIMEOUT_MS) {
 }
 
 // ==========================================
+// SESSION KEEP-ALIVE (proactive token refresh)
+// ==========================================
+let keepAliveTimer = null;
+const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000; // 4 minutes
+
+/**
+ * Starts a periodic check that refreshes the session token before it expires.
+ * Also refreshes when the tab returns from background.
+ * Call once at app startup.
+ */
+export function startSessionKeepAlive() {
+  if (keepAliveTimer) return; // already running
+
+  const doKeepAlive = async () => {
+    try {
+      const session = await getSessionWithTimeout(5000);
+      if (!session) return; // not logged in
+
+      const expiresAt = session.expires_at;
+      if (expiresAt) {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const secsLeft = expiresAt - nowSec;
+        // Refresh if expiring within 5 minutes
+        if (secsLeft < 300) {
+          console.debug('[keepAlive] Token expiring soon, refreshing...');
+          await refreshSessionSilently(10_000);
+        }
+      }
+    } catch (e) {
+      console.debug('[keepAlive] Error (non-fatal):', e?.message || e);
+    }
+  };
+
+  // Run immediately, then on interval
+  doKeepAlive();
+  keepAliveTimer = setInterval(doKeepAlive, KEEP_ALIVE_INTERVAL_MS);
+
+  // Also refresh on tab return from background
+  const onVisible = () => {
+    if (document.visibilityState === 'visible') {
+      doKeepAlive();
+    }
+  };
+  document.addEventListener('visibilitychange', onVisible);
+}
+
+// ==========================================
 // SUPABASE CALL WRAPPER WITH LOGGING
 // ==========================================
 export async function loggedSupabaseCall(operationName, queryFn, timeoutMs) {

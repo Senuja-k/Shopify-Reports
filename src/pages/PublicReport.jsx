@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { useReportManagement } from '../stores/reportManagement';
-import { flattenProductsWithVariants } from '../lib/flattenVariants';
+
 import { exportToExcel } from '../lib/exportToExcel';
 import { applyFilters } from '../lib/filterEvaluation';
+import { detectProductFields } from '../lib/columnDetection';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -15,8 +15,7 @@ import { ProductsTable } from '../components/dashboard/ProductsTable';
 import { Loader2 } from 'lucide-react';
 import { SimpleHeader } from '../components/dashboard/SimpleHeader';
 import { supabasePublic } from '../lib/supabase';
-import { getReportByShareLinkPublic } from '../lib/supabase-utils';
-import { getOrganizationSyncStatus } from '../lib/shopify-sync-utils';
+import { getReportByShareLink } from '../lib/supabase-utils';
 
 /**
  * PUBLIC REPORT VIEWER
@@ -51,20 +50,6 @@ import { getOrganizationSyncStatus } from '../lib/shopify-sync-utils';
 // ============= TYPES =============
 
 // ============= HELPER FUNCTIONS =============
-
-/**
- * Simple hash for password verification.
- * Matches the hash function used in reportManagement store.
- */
-function simpleHash(password) {
-  let hash = 0;
-  for (let i = 0; i < password.length; i++) {
-    const char = password.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-  return Math.abs(hash).toString(36);
-}
 
 /**
  * Check if an error is an AbortError (request cancellation).
@@ -278,9 +263,8 @@ async function fetchPublicReportProducts(
 export function PublicReport() {
   const { shareLink } = useParams();
   const { toast } = useToast();
-  const { getReportByShareLink: getLocalReport, verifyReportPassword } = useReportManagement();
 
-  // Report metadata state
+  // Report metadata state (fetched from Supabase — works for ANY user/browser)
   const [reportData, setReportData] = useState(null);
   const [reportLoading, setReportLoading] = useState(true);
 
@@ -296,59 +280,51 @@ export function PublicReport() {
     error: null,
     products: [],
     lastSyncAt: null,
-    syncStatus: null,
   });
 
   // UI state - VIEWER-SPECIFIC (not persisted, not shared across users)
-  // This implements Report Pundit-style shared link behavior:
-  // - The master report config (columns, filters, etc.) is read-only
-  // - Each viewer can modify filters/sorts locally in their session
-  // - Viewer changes are NEVER written back to the master report
-  // - Viewer changes are NEVER visible to other viewers
+  // Each viewer gets their own isolated React state for filters, sorting, etc.
+  // Changes are NEVER written back to the master report or visible to other viewers.
   const [filterConfig, setFilterConfig] = useState({ items: [] });
   const [isExporting, setIsExporting] = useState(false);
 
   // AbortController ref for managing request cancellation
-  // Each render that triggers a fetch gets a fresh controller
   const abortControllerRef = useRef(null);
 
-  // Get local report if available (for logged-in users who created the report)
-  const localReport = shareLink ? getLocalReport(shareLink) : null;
-  const report = reportData || localReport;
+  // The report is always fetched from Supabase — no local/Zustand dependency
+  const report = reportData;
 
   // ============= EFFECT: Load Report Metadata =============
-  // This fetches the MASTER report configuration (read-only)
-  // The master config includes the default columns, filters, and settings
+  // Always fetches from Supabase using the public (anon) client so it works
+  // for ANY user in ANY browser without needing to be logged in.
   useEffect(() => {
     if (!shareLink) {
       setReportLoading(false);
       return;
     }
 
-    // If we have the report locally, use it
-    if (localReport) {
-      setReportData(localReport);
-      setReportLoading(false);
-      return;
-    }
+    let cancelled = false;
 
-    // Otherwise fetch from Supabase for anonymous access
     const loadReport = async () => {
       try {
-        const supabaseReport = await getReportByShareLinkPublic(shareLink);
+        const supabaseReport = await getReportByShareLink(shareLink);
+        if (cancelled) return;
         if (!supabaseReport) {
           console.warn(`[PublicReport] No report found for share link: ${shareLink}`);
         }
         setReportData(supabaseReport);
       } catch (error) {
+        if (cancelled) return;
         console.error('[PublicReport] Failed to load report metadata:', error);
       } finally {
-        setReportLoading(false);
+        if (!cancelled) setReportLoading(false);
       }
     };
 
     loadReport();
-  }, [shareLink, localReport]);
+
+    return () => { cancelled = true; };
+  }, [shareLink]);
 
   // ============= EFFECT: Initialize Viewer Filters from Master Report =============
   // When the master report loads, initialize the viewer's filter state
@@ -367,7 +343,8 @@ export function PublicReport() {
   }, [report?.id]); // Only re-initialize when report ID changes (different report loaded)
 
   // ============= CALLBACK: Load Products =============
-  // This is the main data fetching function
+  // Fetches product data from Supabase (pre-synced).
+  // No auto-sync logic — just reads what's already there.
   const loadProducts = useCallback(async () => {
     if (!report?.organizationId) {
       setFetchState(prev => ({
@@ -390,36 +367,7 @@ export function PublicReport() {
     setFetchState(prev => ({ ...prev, status: 'loading', error: null }));
 
     try {
-      // Step 1: Check organization sync status
-      // This determines if data is ready for reporting
-      
-      const syncStatus = await getOrganizationSyncStatus(
-        report.organizationId,
-        controller.signal
-      );
-
-      // If aborted during sync check, exit silently (no error, no retry)
-      if (controller.signal.aborted) {
-        
-        return;
-      }
-
-      
-
-      // Step 2: If initial sync not complete, show sync-pending message
-      if (!syncStatus.isReady) {
-        setFetchState({
-          status: 'sync-pending',
-          error,
-          products: [],
-          lastSyncAt,
-          syncStatus,
-        });
-        return;
-      }
-
-      // Step 3: Fetch products from Supabase (pre-synced data)
-      
+      // Fetch products from Supabase (pre-synced data)
       const result = await fetchPublicReportProducts(
         report.storeId,
         report.organizationId,
@@ -428,14 +376,10 @@ export function PublicReport() {
 
       // If aborted during fetch, exit silently
       if (controller.signal.aborted) {
-        
         return;
       }
 
-      // Step 4: Format and flatten products for display
-      // Database rows already represent individual variants (one row per variant)
-      // So we DON'T need to flatten - formatting is enough
-      // But we should deduplicate to handle edge cases
+      // Format products for display
       const formattedProducts = (result.products || []).map((v) => {
         const productData = v.data || v;
         return {
@@ -454,36 +398,24 @@ export function PublicReport() {
       const deduplicatedProducts = formattedProducts.filter((product) => {
         const variantKey = `${product.storeId}-${product.shopify_variant_id || product.id}`;
         if (seenVariantIds.has(variantKey)) {
-          console.warn(`[PublicReport] Removing duplicate variant: ${variantKey} (SKU: ${product.sku || product.variantSku})`);
           return false;
         }
         seenVariantIds.add(variantKey);
         return true;
       });
 
-      if (deduplicatedProducts.length !== formattedProducts.length) {
-        console.warn(`%c[PublicReport] ?? REMOVED ${formattedProducts.length - deduplicatedProducts.length} DUPLICATE VARIANTS`, 'background: red; color: white; font-weight: bold');
-      }
-
-      
-      
-
       setFetchState({
         status: 'success',
         error: null,
         products: deduplicatedProducts,
-        lastSyncAt: result.lastSyncAt || syncStatus.lastSyncAt,
-        syncStatus,
+        lastSyncAt: result.lastSyncAt,
       });
     } catch (error) {
-      // AbortErrors are expected during re-renders - handle silently
+      // AbortErrors are expected during re-renders — handle silently
       if (isAbortError(error)) {
-        
-        // Do NOT retry, do NOT show error - just exit
         return;
       }
 
-      // Real errors should be displayed to user
       console.error('[PublicReport] Failed to load products:', error);
       setFetchState(prev => ({
         ...prev,
@@ -519,10 +451,19 @@ export function PublicReport() {
     setAuthLoading(true);
     // Small delay for UX
     setTimeout(() => {
-      // Verify password directly against the fetched report data
-      // (works for both logged-in users and anonymous viewers)
-      const inputHash = simpleHash(password);
-      if (inputHash === report.password) {
+      // Verify password locally against the report fetched from Supabase
+      // Uses the same hash function as report creation
+      const hashPassword = (pwd) => {
+        let hash = 0;
+        for (let i = 0; i < pwd.length; i++) {
+          const char = pwd.charCodeAt(i);
+          hash = ((hash << 5) - hash) + char;
+          hash = hash & hash;
+        }
+        return Math.abs(hash).toString(36);
+      };
+
+      if (hashPassword(password) === report.password) {
         setIsAuthenticated(true);
         toast({ title: 'Access granted' });
       } else {
@@ -543,7 +484,6 @@ export function PublicReport() {
     setIsExporting(true);
     try {
       const filteredProducts = applyFilters(fetchState.products, filterConfig);
-      
 
       if (filteredProducts.length === 0) {
         toast({
@@ -554,9 +494,22 @@ export function PublicReport() {
         return;
       }
 
-      const filename = `${report.name}-${new Date().toISOString().split('T')[0]}`;
-      exportToExcel(filteredProducts, report.selectedColumns, filename);
+      // Determine columns to export. Prefer the report's selected columns.
+      // If none are defined on the master report, fall back to detected columns
+      // based on the current product data so exports still work.
+      let columnsToExport = Array.isArray(report?.selectedColumns) ? report.selectedColumns : [];
+      if (!columnsToExport || columnsToExport.length === 0) {
+        const detected = detectProductFields(filteredProducts || []);
+        columnsToExport = detected.map((c) => c.key);
+      }
 
+      const filename = `${report.name}-${new Date().toISOString().split('T')[0]}`;
+
+      // Debug logging to help diagnose export issues in the wild
+      console.log('[PublicReport] export: columnsToExport', columnsToExport);
+      console.log('[PublicReport] export: sample product', filteredProducts[0]);
+
+      exportToExcel(filteredProducts, columnsToExport, filename);
       toast({
         title: 'Export successful',
         description: `Exported ${filteredProducts.length} products`,
@@ -565,7 +518,7 @@ export function PublicReport() {
       console.error('[PublicReport] Export error:', error);
       toast({
         title: 'Export failed',
-        description: 'Failed to export products',
+        description: error?.message || 'Failed to export products',
         variant: 'destructive',
       });
     } finally {
@@ -707,32 +660,6 @@ export function PublicReport() {
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mx-auto mb-4" />
               <p className="text-muted-foreground">Loading products...</p>
             </div>
-          </div>
-        )}
-
-        {/* Sync pending state - data not ready yet */}
-        {fetchState.status === 'sync-pending' && (
-          <div className="flex items-center justify-center py-12">
-            <Card className="w-full max-w-md">
-              <CardContent className="pt-8">
-                <div className="text-center">
-                  <RefreshCw className="h-12 w-12 text-amber-500 mx-auto mb-4 animate-spin" />
-                  <h3 className="text-lg font-semibold mb-2">Data Sync in Progress</h3>
-                  <p className="text-muted-foreground text-sm mb-4">
-                    The store data is still being synchronized. Please check back in a few minutes.
-                  </p>
-                  {fetchState.syncStatus && (
-                    <p className="text-xs text-muted-foreground">
-                      {fetchState.syncStatus.syncedStoreCount} of {fetchState.syncStatus.storeCount} stores synced
-                    </p>
-                  )}
-                  <Button onClick={handleRetry} variant="outline" className="mt-4">
-                    <RefreshCw className="h-4 w-4 mr-2" />
-                    Check Again
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
           </div>
         )}
 

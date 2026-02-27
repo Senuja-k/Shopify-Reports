@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { exchangeCodeForToken, saveShopifyStore } from '../lib/shopify-oauth';
 import { supabase } from '../lib/supabase';
@@ -7,25 +7,58 @@ import { useOrganization } from '../stores/organizationStore';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Loader2 } from 'lucide-react';
 
+// Module-level guard: survives component remounts (unlike useRef which resets).
+// Maps code → true to prevent the same authorization code from being exchanged
+// more than once per page load.
+const _processedCodes = new Set();
+
 export default function ShopifyCallback() {
+  const OAUTH_CODE_PREFIX = 'shopify_oauth_code_processed:';
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [status, setStatus] = useState('processing');
   const [error, setError] = useState(null);
   const addStore = useStoreManagement((state) => state.addStore);
   const activeOrganizationId = useOrganization((state) => state.activeOrganizationId);
+  // Guard against React 18 Strict Mode double-invocation (code is single-use)
+  const hasRun = useRef(false);
 
   useEffect(() => {
+    if (hasRun.current) return;
+    hasRun.current = true;
+
     const handleCallback = async () => {
       try {
         // Get the authorization code and shop from URL parameters
         const code = searchParams.get('code');
         const shop = searchParams.get('shop');
-        const state = searchParams.get('state');
 
         if (!code || !shop) {
           throw new Error('Missing authorization code or shop');
         }
+
+        // ---- Module-level guard (survives remounts) ----
+        if (_processedCodes.has(code)) {
+          console.log('[ShopifyCallback] code already being processed (module guard)');
+          setStatus('success');
+          setTimeout(() => navigate('/'), 250);
+          return;
+        }
+        _processedCodes.add(code);
+
+        // Prevent duplicate token exchange for the same single-use code.
+        const codeKey = `${OAUTH_CODE_PREFIX}${code}`;
+        if (sessionStorage.getItem(codeKey) === '1') {
+          setStatus('success');
+          setTimeout(() => {
+            navigate('/');
+          }, 250);
+          return;
+        }
+        sessionStorage.setItem(codeKey, '1');
+
+        // Remove OAuth params from URL immediately to reduce accidental reprocessing on refresh/back.
+        window.history.replaceState({}, document.title, window.location.pathname);
 
         // Get current user
         const {
@@ -89,8 +122,21 @@ export default function ShopifyCallback() {
         }, 2000);
       } catch (err) {
         console.error('OAuth callback error:', err);
+        const msg = err instanceof Error ? err.message : 'An error occurred';
+
+        // If the error is Shopify's "code already used" page, give a friendlier
+        // message and a one-click retry instead of dumping raw HTML.
+        const isCodeUsed =
+          msg.includes('already used') ||
+          msg.includes('was not found') ||
+          msg.includes('invalid_request');
+
         setStatus('error');
-        setError(err instanceof Error ? err.message : 'An error occurred');
+        setError(
+          isCodeUsed
+            ? 'The authorization code expired or was already used. Please reconnect the store.'
+            : msg,
+        );
       }
     };
 

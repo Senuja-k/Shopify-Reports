@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+﻿import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../stores/authStore';
 import { useReportManagement } from '../stores/reportManagement';
 import { useStoreManagement } from '../stores/storeManagement';
@@ -54,6 +54,19 @@ export function CustomReports() {
     setLastSyncAt(null);
     setReportLastSyncMap({});
   }, [activeOrganizationId, isAuthenticated, loadStores, loadReports]);
+
+  // Base URL for share links: prefer explicit env, fall back to redirect URI origin, then window.location
+  const BASE_URL =
+    import.meta.env.VITE_APP_URL ||
+    (import.meta.env.VITE_SHOPIFY_REDIRECT_URI
+      ? (() => {
+          try {
+            return new URL(import.meta.env.VITE_SHOPIFY_REDIRECT_URI).origin;
+          } catch (e) {
+            return window.location.origin;
+          }
+        })()
+      : window.location.origin);
 
   // Load columns when store is selected
   useEffect(() => {
@@ -186,6 +199,22 @@ export function CustomReports() {
     loadReportSyncTimes();
   }, [reports, stores, activeOrganizationId]);
 
+  // Reload page when user switches back to this tab (avoids stale data)
+  const _wasHidden = useRef(false);
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        _wasHidden.current = true;
+      } else if (document.visibilityState === 'visible' && _wasHidden.current) {
+        _wasHidden.current = false;
+        window.location.reload();
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
+
   const handleCreateReport = async () => {
     if (!reportName.trim()) {
       toast({ title: 'Error', description: 'Report name is required', variant: 'destructive' });
@@ -222,7 +251,7 @@ export function CustomReports() {
     });
 
     // Copy share link to clipboard
-    const shareLink = `${window.location.origin}/report/share/${newReport.shareLink}`;
+    const shareLink = `${BASE_URL}/report/share/${newReport.shareLink}`;
     navigator.clipboard.writeText(shareLink);
 
     toast({
@@ -296,7 +325,7 @@ export function CustomReports() {
   };
 
   const handleCopyShareLink = (shareLink) => {
-    const link = `${window.location.origin}/report/share/${shareLink}`;
+    const link = `${BASE_URL}/report/share/${shareLink}`;
     navigator.clipboard.writeText(link);
     toast({ title: 'Share link copied to clipboard' });
   };
@@ -517,7 +546,7 @@ export function CustomReports() {
                     {/* Share Link */}
                     <div className="flex items-center gap-2 bg-muted p-3 rounded">
                       <code className="text-xs flex-1 truncate">
-                        {window.location.origin}/report/share/{report.shareLink}
+                        {BASE_URL}/report/share/{report.shareLink}
                       </code>
                       <Button
                         variant="ghost"

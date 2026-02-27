@@ -39,6 +39,8 @@ export const STRING_OPERATORS = [
   'not_equals',
   'contains',
   'not_contains',
+  'greater_than',
+  'less_than',
   'starts_with',
   'ends_with',
   'is_blank',

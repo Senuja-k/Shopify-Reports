@@ -36,6 +36,40 @@ import { applyFilters } from "@/lib/filterEvaluation";
  * 2. **Client-side** (reports): pass `initialProducts` – the component
  *    handles filtering, sorting & pagination internally.
  */
+function MobileProductList({ products, pageIndex, pageSize }) {
+  return (
+    <div className="space-y-3 p-2">
+      {products.map((product, idx) => {
+        const key = product.id || product.shopify_product_id || idx;
+        const price = String(
+          getNestedValue(product, "variantPrice") || getNestedValue(product, "price") || "—",
+        );
+        return (
+          <div key={key} className="bg-card border rounded p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="font-medium text-sm truncate">{product.title || product.name || 'Untitled'}</div>
+                <div className="text-xs text-muted-foreground truncate">{product.handle || product.shopify_handle || ''}</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Badge variant="outline" className="text-xs">{product.vendor || 'N/A'}</Badge>
+                  {product.productType && (
+                    <Badge variant="outline" className="text-xs">{product.productType}</Badge>
+                  )}
+                  <span className="text-xs text-muted-foreground">SKU: {product.sku || (product.variantData && product.variantData.sku) || '—'}</span>
+                </div>
+              </div>
+              <div className="text-right flex-shrink-0">
+                <div className="text-sm font-medium">{price}</div>
+                <div className="text-xs text-muted-foreground">{product.storeName || ''}</div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function ProductsTable({
   // --- Server-side mode props (from Index.jsx) ---
   products: pageProducts,
@@ -245,6 +279,20 @@ export function ProductsTable({
     (item) => typeof item === "object" && "id" in item,
   ).length;
 
+  // Mobile detection for compact list rendering
+  const [isMobile, setIsMobile] = useState(() => {
+    try {
+      return typeof window !== 'undefined' && window.innerWidth < 640;
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 640);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   // Cell renderer
   const renderCellContent = (product, column) => {
     const value = getNestedValue(product, column.key);
@@ -348,7 +396,7 @@ export function ProductsTable({
           <div className="ml-auto">
             <Select
               value={pageSize.toString()}
-              disabled={!isClientSide}
+              disabled={!isClientSide && !onPageSizeChange}
               onValueChange={(v) => {
                 const newSize = parseInt(v);
                 if (isClientSide) {
@@ -363,13 +411,13 @@ export function ProductsTable({
                 <SelectValue placeholder="Items per page" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="25">25 per page</SelectItem>
-                {isClientSide && (
-                  <SelectItem value="50">50 per page</SelectItem>
-                )}
-                {isClientSide && (
-                  <SelectItem value="100">100 per page</SelectItem>
-                )}
+                  <SelectItem value="25">25 per page</SelectItem>
+                  {(isClientSide || onPageSizeChange) && (
+                    <>
+                      <SelectItem value="50">50 per page</SelectItem>
+                      <SelectItem value="100">100 per page</SelectItem>
+                    </>
+                  )}
               </SelectContent>
             </Select>
           </div>
@@ -395,10 +443,11 @@ export function ProductsTable({
         )}
       </div>
 
-      {/* Table */}
+      {/* Table / Mobile list */}
       <div className="glass-card rounded-lg overflow-hidden relative">
         <div className="overflow-x-auto">
-          <Table>
+          
+            <Table>
             <TableHeader>
               <TableRow className="bg-muted/30 hover:bg-muted/30">
                 <TableHead className="w-[50px]">#</TableHead>
@@ -530,7 +579,6 @@ export function ProductsTable({
         </div>
       </div>
 
-      {/* Pagination */}
       <div className="glass-card rounded-lg p-4">
         <div className="flex items-center justify-between text-sm">
           <div className="text-muted-foreground">

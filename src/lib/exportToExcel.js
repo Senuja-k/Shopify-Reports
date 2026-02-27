@@ -99,14 +99,35 @@ export function exportToExcel(
   const fullFilename = `${filename}-${dateStr}.xlsx`;
   
   try {
-    // Use writeFile with proper options for browser download
-    XLSX.writeFile(workbook, fullFilename, { 
-      bookType: 'xlsx',
-      type: 'binary'
-    });
-    
+    // Debug: log export inputs
+    console.log('[exportToExcel] exporting', { fullFilename, columns: normalizedColumns.map(c=>c.key), sample: exportData[0] });
+
+    // Try browser-friendly writeFile first
+    if (typeof XLSX.writeFile === 'function') {
+      XLSX.writeFile(workbook, fullFilename, { 
+        bookType: 'xlsx',
+        type: 'binary'
+      });
+      return;
+    }
+
+    // Fallback: generate array buffer and download via blob
+    const wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([wbout], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fullFilename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    return;
+
   } catch (error) {
     console.error('Error writing Excel file:', error);
-    throw new Error('Failed to download Excel file');
+    const err = new Error('Failed to download Excel file: ' + (error?.message || String(error)));
+    err.cause = error;
+    throw err;
   }
 }

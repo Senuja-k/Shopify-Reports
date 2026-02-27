@@ -16,6 +16,7 @@ export const useStoreManagement = create()(
       // ✅ UPDATED: accepts options { organizationId, force }
       loadStores: async (options = {}) => {
         const { organizationId: orgFromCaller, force = false } = options;
+        console.log('[storeManagement] loadStores called', { orgFromCaller, force });
 
         // Prevent concurrent calls
         if (get().isLoading && !force) {
@@ -40,8 +41,8 @@ export const useStoreManagement = create()(
           
 
           if (!user) {
+            console.log('[storeManagement] no user yet; aborting loadStores');
             // ✅ Don’t wipe persisted stores (auth may still hydrate)
-            
             return;
           }
 
@@ -49,12 +50,13 @@ export const useStoreManagement = create()(
           const organizationId = orgFromCaller ?? useOrganization.getState().activeOrganizationId;
 
           if (!organizationId) {
+            console.log('[storeManagement] no organizationId provided; aborting loadStores');
             // ✅ IMPORTANT: do NOT clear stores here (this caused “No stores connected”)
-            
             return;
           }
 
           
+          console.log('[storeManagement] fetching stores for org', organizationId, 'user', user?.id);
           const stores = await getStores(user.id, organizationId);
           if (stores === null) {
             return;

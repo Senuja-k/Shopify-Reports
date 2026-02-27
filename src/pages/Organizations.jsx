@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState, useRef } from 'react';
 import { SimpleHeader } from '@/components/dashboard/SimpleHeader';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -62,6 +62,22 @@ export function Organizations() {
       loadMembers(activeOrganizationId);
     }
   }, [activeOrganizationId, loadMembers]);
+
+  // Reload page when user switches back to this tab (avoids stale data)
+  const _wasHidden = useRef(false);
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        _wasHidden.current = true;
+      } else if (document.visibilityState === 'visible' && _wasHidden.current) {
+        _wasHidden.current = false;
+        window.location.reload();
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
 
   const activeOrg = useMemo(
     () => organizations.find((org) => org.id === activeOrganizationId) || null,

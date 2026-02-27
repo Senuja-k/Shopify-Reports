@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { useAuth } from '@/stores/authStore.jsx';
+import { useProductsStore } from '@/stores/productsStore';
 import {
   addOrganizationMemberByEmail,
   createOrganizationForUser,
@@ -85,13 +86,42 @@ export const useOrganization = create()(
 
       setActiveOrganization: async (organizationId) => {
         const currentOrgId = get().activeOrganizationId;
+        console.log('[organizationStore] setActiveOrganization called', { currentOrgId, organizationId });
         set({ activeOrganizationId: organizationId });
 
+        // If the active organization changed via user action, force a full
+        // page reload so the app initializes cleanly for the new org.
         if (currentOrgId !== organizationId) {
+          try {
+            console.log('[organizationStore] active org changed — performing full reload', { from: currentOrgId, to: organizationId });
+            // If a product sync is currently running, avoid forcing a full
+            // page reload (which would interrupt the sync). Instead, perform
+            // an in-memory store load so the app continues without reload.
+            const isSyncing = useProductsStore.getState().isSyncing;
+            if (isSyncing) {
+              console.log('[organizationStore] active org change detected during sync — deferring full reload and loading stores in-memory');
+              const { useStoreManagement } = await import('./storeManagement');
+              if (organizationId) {
+                useStoreManagement.getState().loadStores({ organizationId, force: true });
+              } else {
+                useStoreManagement.getState().clearStores();
+              }
+              return;
+            }
+
+            // No active sync: safe to reload immediately.
+            window.location.reload();
+            return;
+          } catch (e) {
+            console.warn('[organizationStore] reload failed, falling back to in-memory load', e);
+          }
+
           const { useStoreManagement } = await import('./storeManagement');
           if (organizationId) {
+            console.log('[organizationStore] loading stores for org', organizationId);
             useStoreManagement.getState().loadStores({ organizationId, force: true });
           } else {
+            console.log('[organizationStore] clearing stores for null org');
             useStoreManagement.getState().clearStores();
           }
         }

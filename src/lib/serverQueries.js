@@ -11,7 +11,46 @@
  * - Abort signal supported but optional
  */
 
-import { supabase } from "./supabase";
+import { supabase, refreshSessionSilently } from "./supabase";
+
+// ---------------------------------------------------------------------------
+// Retry wrapper for transient failures (auth expiry, connection drops)
+// ---------------------------------------------------------------------------
+
+function isRetryableError(err) {
+  if (!err) return false;
+  const msg = String(err.message || err.details || err || "").toLowerCase();
+  return (
+    msg.includes("jwt") ||
+    msg.includes("token") ||
+    msg.includes("unauthorized") ||
+    msg.includes("forbidden") ||
+    msg.includes("failed to fetch") ||
+    msg.includes("network") ||
+    msg.includes("502") ||
+    msg.includes("503") ||
+    msg.includes("gateway")
+  );
+}
+
+/**
+ * Runs a Supabase query function with automatic retry on auth/network errors.
+ * On first failure it silently refreshes the session and retries once.
+ */
+async function withRetry(queryFn, label = "query") {
+  try {
+    return await queryFn();
+  } catch (err) {
+    if (!isRetryableError(err)) throw err;
+    console.warn(`[serverQueries] ${label} failed with retryable error, refreshing session and retrying...`);
+    const refreshed = await refreshSessionSilently(8000);
+    if (!refreshed) {
+      console.warn(`[serverQueries] Session refresh failed, rethrowing original error`);
+      throw err;
+    }
+    return await queryFn();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Filter → Supabase query translation
@@ -235,48 +274,50 @@ export async function queryProductsPage({
   includeCount = true,
   totalCountHint = 0,
 }) {
-  const from = pageIndex * pageSize;
-  const to = from + pageSize - 1;
+  return withRetry(async () => {
+    const from = pageIndex * pageSize;
+    const to = from + pageSize - 1;
 
-  let dataQuery = buildBaseQuery(
-    "id, store_id, shopify_product_id, shopify_variant_id, data",
-    storeIds,
-    organizationId,
-    userId,
-    filterConfig,
-    signal,
-  );
-
-  dataQuery = applySortToQuery(dataQuery, sortField, sortDirection);
-  dataQuery = dataQuery.range(from, to);
-
-  let totalCount = totalCountHint || 0;
-  let dataResult;
-
-  if (includeCount) {
-    const countQuery = buildBaseQuery(
-      "id",
+    let dataQuery = buildBaseQuery(
+      "id, store_id, shopify_product_id, shopify_variant_id, data",
       storeIds,
       organizationId,
       userId,
       filterConfig,
       signal,
-      { count: "estimated", head: true },
     );
 
-    const [countResult, pageResult] = await Promise.all([countQuery, dataQuery]);
-    if (countResult.error) throw countResult.error;
-    totalCount = countResult.count ?? 0;
-    dataResult = pageResult;
-  } else {
-    dataResult = await dataQuery;
-  }
+    dataQuery = applySortToQuery(dataQuery, sortField, sortDirection);
+    dataQuery = dataQuery.range(from, to);
 
-  if (dataResult.error) throw dataResult.error;
+    let totalCount = totalCountHint || 0;
+    let dataResult;
 
-  const pageCount = Math.ceil(totalCount / pageSize);
+    if (includeCount) {
+      const countQuery = buildBaseQuery(
+        "id",
+        storeIds,
+        organizationId,
+        userId,
+        filterConfig,
+        signal,
+        { count: "estimated", head: true },
+      );
 
-  return { data: formatRows(dataResult.data || []), totalCount, pageCount };
+      const [countResult, pageResult] = await Promise.all([countQuery, dataQuery]);
+      if (countResult.error) throw countResult.error;
+      totalCount = countResult.count ?? 0;
+      dataResult = pageResult;
+    } else {
+      dataResult = await dataQuery;
+    }
+
+    if (dataResult.error) throw dataResult.error;
+
+    const pageCount = Math.ceil(totalCount / pageSize);
+
+    return { data: formatRows(dataResult.data || []), totalCount, pageCount };
+  }, "queryProductsPage");
 }
 
 /**
@@ -293,38 +334,39 @@ export async function queryProductStats({
   filterConfig,
   signal,
 }) {
-  let query = buildBaseQuery(
-    "store_id, data",
-    storeIds,
-    organizationId,
-    userId,
-    filterConfig,
-    signal,
-    { count: "estimated" },
-  );
+  return withRetry(async () => {
+    let query = buildBaseQuery(
+      "store_id, data",
+      storeIds,
+      organizationId,
+      userId,
+      filterConfig,
+      signal,
+      { count: "estimated" },
+    );
 
-  const { data, count, error } = await query;
+    const { data, count, error } = await query;
 
-  if (error) {
-    // abort-safe
-    if (
-      String(error.message || "")
-        .toLowerCase()
-        .includes("abort") ||
-      String(error.name || "") === "AbortError"
-    ) {
-      return {
-        totalProducts: 0,
-        totalStores: 0,
-        totalVendors: 0,
-        totalTypes: 0,
-        avgPrice: 0,
-      };
+    if (error) {
+      // abort-safe
+      if (
+        String(error.message || "")
+          .toLowerCase()
+          .includes("abort") ||
+        String(error.name || "") === "AbortError"
+      ) {
+        return {
+          totalProducts: 0,
+          totalStores: 0,
+          totalVendors: 0,
+          totalTypes: 0,
+          avgPrice: 0,
+        };
+      }
+      throw error;
     }
-    throw error;
-  }
 
-  const rows = data || [];
+    const rows = data || [];
   const vendors = new Set();
   const types = new Set();
   const storeSet = new Set();
@@ -351,6 +393,7 @@ export async function queryProductStats({
     totalTypes: types.size,
     avgPrice: priceCount > 0 ? priceSum / priceCount : 0,
   };
+  }, "queryProductStats");
 }
 
 /**
@@ -375,54 +418,142 @@ export async function queryAllFilteredProducts({
     { count: "estimated", head: true },
   );
 
-  const { count, error: countError } = await countQuery;
+  // Helper to detect abort-like failures (transient network/gateway/timeouts)
+  const isAbortLikeLocal = (err) => {
+    if (!err) return false;
+    const msg = String(err.message || err.details || err || "").toLowerCase();
+    return (
+      String(err.name || "").toLowerCase().includes("abort") ||
+      msg.includes("abort") ||
+      msg.includes("timeout") ||
+      msg.includes("gateway") ||
+      msg.includes("502") ||
+      msg.includes("failed to fetch")
+    );
+  };
+
+  let countResult;
+  try {
+    countResult = await countQuery;
+  } catch (err) {
+    if (!isAbortLikeLocal(err)) throw err;
+    // Retry the count query without passing the caller's signal in case
+    // it was aborted externally.
+    try {
+      const retryCountQuery = buildBaseQuery(
+        "id",
+        storeIds,
+        organizationId,
+        userId,
+        filterConfig,
+        undefined,
+        { count: "estimated", head: true },
+      );
+      countResult = await retryCountQuery;
+    } catch (err2) {
+      throw err2;
+    }
+  }
+
+  const { count, error: countError } = countResult || {};
   if (countError) throw countError;
 
   const total = count || 0;
   if (total === 0) return [];
+  // Strategy: attempt a higher-throughput fetch first. If an Abort-like
+  // error occurs (timeout/gateway/proxy abort), retry with reduced
+  // concurrency/batch size and finally fall back to sequential batches.
+  const makeAttempt = async (batchSize, maxConcurrent, useSignal) => {
+    const totalBatches = Math.ceil(total / batchSize);
+    const allProducts = [];
 
-  const batchSize = 1000;
-  const totalBatches = Math.ceil(total / batchSize);
-  const maxConcurrent = 5;
-  const allProducts = [];
+    for (
+      let groupStart = 0;
+      groupStart < totalBatches;
+      groupStart += maxConcurrent
+    ) {
+      const groupEnd = Math.min(groupStart + maxConcurrent, totalBatches);
+      const batchPromises = [];
 
-  for (
-    let groupStart = 0;
-    groupStart < totalBatches;
-    groupStart += maxConcurrent
-  ) {
-    const groupEnd = Math.min(groupStart + maxConcurrent, totalBatches);
-    const batchPromises = [];
+      for (let i = groupStart; i < groupEnd; i++) {
+        const from = i * batchSize;
+        const to = from + batchSize - 1;
 
-    for (let i = groupStart; i < groupEnd; i++) {
-      const from = i * batchSize;
-      const to = from + batchSize - 1;
+        const fetchBatch = async () => {
+          let q = buildBaseQuery(
+            "id, store_id, shopify_product_id, shopify_variant_id, data",
+            storeIds,
+            organizationId,
+            userId,
+            filterConfig,
+            useSignal ? signal : undefined,
+          );
+          q = applySortToQuery(q, sortField, sortDirection);
+          q = q.range(from, to);
 
-      const fetchBatch = async () => {
+          const { data, error } = await q;
+          if (error) throw error;
+          return formatRows(data || []);
+        };
+
+        batchPromises.push(fetchBatch());
+      }
+
+      const results = await Promise.all(batchPromises);
+      for (const batch of results) allProducts.push(...batch);
+    }
+
+    return allProducts;
+  };
+
+  const isAbortLike = (err) => {
+    if (!err) return false;
+    const msg = String(err.message || err.details || err || "").toLowerCase();
+    return (
+      String(err.name || "").toLowerCase().includes("abort") ||
+      msg.includes("abort") ||
+      msg.includes("timeout") ||
+      msg.includes("gateway") ||
+      msg.includes("502") ||
+      msg.includes("failed to fetch")
+    );
+  };
+
+  // First attempt: conservative parameters to avoid server timeouts
+  try {
+    return await makeAttempt(500, 2, true);
+  } catch (err) {
+    if (!isAbortLike(err)) throw err;
+    // Retry with even smaller batches and single-threaded fetch without
+    // the caller-provided signal (in case the original signal was aborted).
+    try {
+      return await makeAttempt(250, 1, false);
+    } catch (err2) {
+      if (!isAbortLike(err2)) throw err2;
+      // Final fallback: sequential batches (slow but most reliable)
+      const finalList = [];
+      const finalBatchSize = 100;
+      const finalTotalBatches = Math.ceil(total / finalBatchSize);
+      for (let i = 0; i < finalTotalBatches; i++) {
+        const from = i * finalBatchSize;
+        const to = from + finalBatchSize - 1;
         let q = buildBaseQuery(
           "id, store_id, shopify_product_id, shopify_variant_id, data",
           storeIds,
           organizationId,
           userId,
           filterConfig,
-          signal,
+          undefined,
         );
         q = applySortToQuery(q, sortField, sortDirection);
         q = q.range(from, to);
-
         const { data, error } = await q;
         if (error) throw error;
-        return formatRows(data || []);
-      };
-
-      batchPromises.push(fetchBatch());
+        finalList.push(...formatRows(data || []));
+      }
+      return finalList;
     }
-
-    const results = await Promise.all(batchPromises);
-    for (const batch of results) allProducts.push(...batch);
   }
-
-  return allProducts;
 }
 
 // ---------------------------------------------------------------------------

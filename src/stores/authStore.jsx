@@ -15,6 +15,7 @@ export const useAuth = create(
       user: null,
       isAuthenticated: false,
       isLoading: false,
+      isInitialized: false,
 
       initializeAuth: async () => {
         if (inFlightAuthInit) return inFlightAuthInit;
@@ -99,6 +100,12 @@ export const useAuth = create(
             console.error('[authStore] Error initializing auth:', error);
             set({ isLoading: false });
           } finally {
+            // Mark that initialization attempt completed (so UI can stop waiting)
+            try {
+              set({ isLoading: false, isInitialized: true });
+            } catch (e) {
+              // ignore set errors during teardown
+            }
             inFlightAuthInit = null;
           }
         })();

@@ -198,7 +198,10 @@ function ConditionRow({
 	onUpdate,
 	onRemove
 }) {
-	return (
+    const col = availableColumns.find(c => c.key === condition.field);
+    const isNumeric = col?.type === 'number' || col?.type === 'currency';
+
+    return (
 		<div className="flex items-center gap-2 flex-wrap">
 			<Select
 				value={condition.field}
@@ -245,7 +248,7 @@ function ConditionRow({
 			{needsValue && !needsList && (
 				<>
 					<Input
-						type="text"
+						type={isNumeric ? 'number' : 'text'}
 						value={condition.value || ''}
 						onChange={(e) => onUpdate({ value: e.target.value })}
 						placeholder="Value"
@@ -253,7 +256,7 @@ function ConditionRow({
 					/>
 					{needsTwoValues && (
 						<Input
-							type="text"
+							type={isNumeric ? 'number' : 'text'}
 							value={condition.value2 || ''}
 							onChange={(e) => onUpdate({ value2: e.target.value })}
 							placeholder="Value 2"
